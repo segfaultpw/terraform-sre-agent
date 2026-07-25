@@ -17,7 +17,7 @@ module "sre_agent_remediation" {
   source = "github.com/segfaultpw/terraform-sre-agent//modules/aws-ssm-remediation?ref=v1.0.0"
 
   external_id           = "the-value-from-the-settings-page"
-  trusted_principal_arn = "arn:aws:iam::000000000000:role/sre-agent-platform"
+  trusted_principal_arn = "arn:aws:iam::111122223333:role/sre-agent-platform"
   aws_region            = "us-east-1"
 
   target_instance_tags = {

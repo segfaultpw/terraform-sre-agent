@@ -21,7 +21,9 @@ module "sre_agent_readonly" {
   #   source = "github.com/segfaultpw/terraform-sre-agent//modules/aws-readonly?ref=v1.0.0"
   source = "../../modules/aws-readonly"
 
-  # Copy both of these from SRE Agent: Settings -> Data sources -> AWS.
+  # Both values are shown on the AWS data-source form in SRE Agent:
+  # Settings -> Data sources -> add/edit AWS -> auth type "assume role".
+  # The ARN below is a sample; use the one the page shows you.
   external_id           = var.external_id
   trusted_principal_arn = var.trusted_principal_arn
 

@@ -2,24 +2,87 @@
  * Read-only AWS access for SRE Agent.
  *
  * Creates the role SRE Agent assumes to read your account, and a policy
- * containing exactly the actions the product calls — no more.
+ * covering the workload surface it inspects.
+ *
+ * Scope note: this is deliberately the *service-wide read surface* rather than
+ * the exact list of API calls the product makes today. Two reasons. A policy
+ * pinned to today's call list needs re-applying every time a feature ships,
+ * and the failure when it is stale is silent — a missing permission and "there
+ * is nothing to report" render identically in this product. Read access to
+ * describe/list operations on compute, observability and tagging is also the
+ * grant most organisations already model as low risk.
+ *
+ * Every statement is still read-only: nothing here can create, modify or
+ * delete. Toggle off any service you do not want inspected.
  */
 
 locals {
-  # Every action below corresponds to a call the product actually makes. Adding
-  # a service here without a corresponding call is how a "read-only" policy
-  # quietly becomes a broad one, so each block names the feature that needs it.
+  # Each block names the feature it powers. `Describe*`/`List*`/`Get*` mirrors
+  # how AWS's own ReadOnlyAccess policies are shaped, so it is a familiar grant
+  # to review.
   statements = {
-    # Capacity planning and the FinOps waste detectors (instances, volumes,
-    # elastic IPs, snapshots, AMIs).
+    # Instances, volumes, elastic IPs, snapshots, AMIs, security groups,
+    # subnets, VPCs. Capacity planning and every FinOps waste detector.
     ec2 = {
       enabled = var.enable_ec2
+      actions = ["ec2:Describe*"]
+    }
+
+    # Auto Scaling groups: the thing that actually decides how many instances a
+    # workload has, so capacity without it is a snapshot rather than a trend.
+    autoscaling = {
+      enabled = var.enable_autoscaling
       actions = [
-        "ec2:DescribeInstances",
-        "ec2:DescribeVolumes",
-        "ec2:DescribeAddresses",
-        "ec2:DescribeSnapshots",
-        "ec2:DescribeImages",
+        "autoscaling:Describe*",
+      ]
+    }
+
+    ecs = {
+      enabled = var.enable_ecs
+      actions = [
+        "ecs:List*",
+        "ecs:Describe*",
+      ]
+    }
+
+    # EKS cluster metadata. Note this is the AWS-side view (cluster, nodegroups,
+    # versions); reading what runs *inside* the cluster needs the
+    # kubernetes-rbac module as well, since EKS authorises that separately
+    # through the cluster's own RBAC.
+    eks = {
+      enabled = var.enable_eks
+      actions = [
+        "eks:List*",
+        "eks:Describe*",
+      ]
+    }
+
+    lambda = {
+      enabled = var.enable_lambda
+      actions = [
+        "lambda:List*",
+        "lambda:Get*",
+      ]
+    }
+
+    # Load balancers and target groups: where "the service is down" is usually
+    # first visible, and how a workload maps to the traffic reaching it.
+    elb = {
+      enabled = var.enable_load_balancing
+      actions = [
+        "elasticloadbalancing:Describe*",
+      ]
+    }
+
+    # Managed data stores a workload depends on. Metadata and configuration
+    # only — no data-plane access exists in these actions.
+    databases = {
+      enabled = var.enable_databases
+      actions = [
+        "rds:Describe*",
+        "rds:List*",
+        "elasticache:Describe*",
+        "elasticache:List*",
       ]
     }
 
@@ -28,62 +91,59 @@ locals {
     cloudwatch = {
       enabled = var.enable_cloudwatch
       actions = [
-        "cloudwatch:GetMetricStatistics",
-        "cloudwatch:GetMetricData",
-        "cloudwatch:ListMetrics",
-        "cloudwatch:DescribeAlarms",
-        "cloudwatch:DescribeAlarmHistory",
+        "cloudwatch:Describe*",
+        "cloudwatch:Get*",
+        "cloudwatch:List*",
       ]
     }
 
-    # Log search during investigations, including Insights queries.
+    # Log search during investigations, including Insights queries. StopQuery
+    # is a write-shaped action that only cancels a query this role started.
     logs = {
       enabled = var.enable_logs
       actions = [
-        "logs:DescribeLogGroups",
+        "logs:Describe*",
+        "logs:Get*",
+        "logs:List*",
         "logs:FilterLogEvents",
-        "logs:GetLogEvents",
         "logs:StartQuery",
-        "logs:GetQueryResults",
-      ]
-    }
-
-    ecs = {
-      enabled = var.enable_ecs
-      actions = [
-        "ecs:ListClusters",
-        "ecs:ListServices",
-        "ecs:DescribeServices",
-        "ecs:ListTasks",
-      ]
-    }
-
-    lambda = {
-      enabled = var.enable_lambda
-      actions = [
-        "lambda:ListFunctions",
-        "lambda:GetFunction",
-        "lambda:GetFunctionConfiguration",
+        "logs:StopQuery",
       ]
     }
 
     # "Who changed what" during an investigation.
     cloudtrail = {
       enabled = var.enable_cloudtrail
-      actions = ["cloudtrail:LookupEvents"]
+      actions = [
+        "cloudtrail:LookupEvents",
+        "cloudtrail:Describe*",
+        "cloudtrail:Get*",
+      ]
     }
 
     xray = {
       enabled = var.enable_xray
       actions = [
-        "xray:GetTraceSummaries",
-        "xray:BatchGetTraces",
+        "xray:Get*",
+        "xray:BatchGet*",
+      ]
+    }
+
+    # The tagging API resolves ownership across every service at once. Without
+    # it, deriving an owner means asking each service separately and missing
+    # anything neither module knows about.
+    tagging = {
+      enabled = var.enable_tagging
+      actions = [
+        "tag:GetResources",
+        "tag:GetTagKeys",
+        "tag:GetTagValues",
       ]
     }
 
     # Only if you point SRE Agent's AI provider at Bedrock in your own account.
-    # Off by default: most deployments use the platform's provider instead, and
-    # InvokeModel bills you directly.
+    # Off by default: this is the one block that is not read-only (InvokeModel
+    # bills you directly), and most deployments use the platform's provider.
     bedrock = {
       enabled = var.enable_bedrock
       actions = [
@@ -111,13 +171,16 @@ resource "terraform_data" "at_least_one_service" {
 }
 
 data "aws_iam_policy_document" "readonly" {
+  # Named iterator purely for readability: the default would also be called
+  # `statement`, which reads as if the block were referring to itself.
   dynamic "statement" {
     for_each = local.enabled_statements
+    iterator = svc
 
     content {
-      sid       = title(statement.key)
+      sid       = title(svc.key)
       effect    = "Allow"
-      actions   = statement.value.actions
+      actions   = svc.value.actions
       resources = ["*"]
     }
   }
@@ -157,7 +220,7 @@ resource "aws_iam_role" "this" {
 
 resource "aws_iam_policy" "this" {
   name        = var.policy_name
-  description = "Actions SRE Agent calls when reading this account"
+  description = "Read access SRE Agent uses to inspect workloads in this account"
   policy      = data.aws_iam_policy_document.readonly.json
 
   tags = var.tags

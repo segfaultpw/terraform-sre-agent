@@ -3,35 +3,48 @@
 The permissions SRE Agent needs, as reviewable Terraform rather than a policy
 you paste out of a doc.
 
-Every action in these modules corresponds to a call the product actually makes.
-They are generated from the code, not written by hand, which is the point: a
-policy that drifts from the code fails as an empty capacity page or an opaque
-`AccessDenied`, and neither says which permission was missing.
+The read policy covers the **service-wide read surface** for workloads,
+observability and tagging — deliberately wider than the exact calls the product
+makes today.
+
+That is a trade, so it is worth stating plainly. A policy pinned to today's call
+list has to be re-applied every time a feature ships, and when it is stale the
+failure is silent: a missing permission and "there is nothing to report" render
+identically in this product. Describe/list access to compute and telemetry is
+also the grant most organisations already model as low risk. If you would rather
+grant only what is used right now, every service is individually toggleable.
+
+Nothing in the read modules can create, modify or delete.
 
 ## Modules
 
 | Module | What it does | Grants |
 |---|---|---|
-| [`aws-readonly`](modules/aws-readonly) | The role SRE Agent assumes to read your AWS account | Read-only across EC2, CloudWatch, Logs, ECS, Lambda, CloudTrail, optionally X-Ray and Bedrock |
+| [`aws-readonly`](modules/aws-readonly) | The role SRE Agent assumes to read your AWS account | Read-only across EC2, Auto Scaling, ECS, EKS, Lambda, load balancers, RDS/ElastiCache metadata, CloudWatch, Logs, CloudTrail, X-Ray and tagging. Bedrock opt-in. |
 | [`aws-ssm-remediation`](modules/aws-ssm-remediation) | Opt-in command execution for automated remediation | `ssm:SendCommand`, scoped by instance tag and SSM document |
-| [`kubernetes-rbac`](modules/kubernetes-rbac) | Read-only cluster access | `get`/`list` on pods, nodes, namespaces, services, deployments, replicasets, jobs, cronjobs, and metrics |
+| [`kubernetes-rbac`](modules/kubernetes-rbac) | Read-only cluster access | `get`/`list` on pods, nodes, namespaces, services, deployments, replicasets, jobs, cronjobs, plus metrics and events |
 
 ## Start here
 
-You need two values from SRE Agent, both on **Settings → Data sources → AWS**:
+Both values you need are shown on the AWS data-source form in SRE Agent:
+**Settings → Data sources → add or edit an AWS source → auth type "assume
+role"**.
 
-- **ExternalId** — generated per organization. Do not invent your own; the
-  platform sends the value it generated, and a mismatch denies every
-  `AssumeRole`.
-- **Trusted principal ARN** — the SRE Agent platform identity. The same for
-  every customer, published in the setup guide.
+- **ExternalId** — generated for your organization. Do not invent your own: the
+  platform sends the value it issued, and a mismatch denies every `AssumeRole`.
+- **Principal to trust** — the identity that assumes your role. The same for
+  every customer.
+
+Neither is a secret, and the ARNs in this repository are samples. The principal
+grants nothing on its own — every request must also carry your ExternalId,
+which is the whole point of the condition.
 
 ```hcl
 module "sre_agent_readonly" {
   source = "github.com/segfaultpw/terraform-sre-agent//modules/aws-readonly?ref=v1.0.0"
 
   external_id           = "the-value-from-the-settings-page"
-  trusted_principal_arn = "arn:aws:iam::000000000000:role/sre-agent-platform"
+  trusted_principal_arn = "arn:aws:iam::111122223333:role/sre-agent-platform"
 }
 
 output "role_arn" {
@@ -96,6 +109,13 @@ A **major** bump changes variables or removes permissions.
 | Terraform | >= 1.5 |
 | `hashicorp/aws` | >= 5.0 |
 | `hashicorp/kubernetes` | >= 2.24 |
+
+## EKS needs both modules
+
+`enable_eks` grants the AWS-side view: clusters, node groups, versions. It does
+**not** let SRE Agent see what runs inside the cluster — EKS authorises that
+separately through the cluster's own RBAC. For workloads, pods and utilization,
+apply `kubernetes-rbac` against the cluster as well.
 
 ## Verifying what you granted
 

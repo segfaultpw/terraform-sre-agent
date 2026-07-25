@@ -18,8 +18,11 @@ variable "external_id" {
 variable "trusted_principal_arn" {
   type        = string
   description = <<-EOT
-    The SRE Agent platform principal allowed to assume this role. Published in
-    the setup guide; it is the same for every customer.
+    The SRE Agent platform principal allowed to assume this role.
+
+    Shown alongside your ExternalId on the same settings page. It is the same
+    for every customer and is useless on its own: without the matching
+    ExternalId, AssumeRole is denied.
   EOT
 
   validation {
@@ -67,12 +70,66 @@ variable "tags" {
 }
 
 # --- Service toggles --------------------------------------------------------
-# Each maps to a product feature. Turning one off is safe; the feature that
-# needs it degrades to "no data" rather than breaking.
+# Each maps to a product feature. Turning one off is safe: the feature that
+# needs it degrades to "no data" rather than erroring — which is worth knowing,
+# because an empty page and a missing permission look identical in this
+# product. If something reads as empty, check the policy before concluding
+# there is nothing to report.
 
 variable "enable_ec2" {
   type        = bool
-  description = "EC2 inventory. Required for capacity planning and the FinOps waste detectors."
+  description = "EC2 read surface. Required for capacity planning and the FinOps waste detectors."
+  default     = true
+}
+
+variable "enable_autoscaling" {
+  type        = bool
+  description = <<-EOT
+    Auto Scaling groups. These decide how many instances a workload actually
+    has, so capacity without them is a snapshot rather than a trend.
+  EOT
+  default     = true
+}
+
+variable "enable_ecs" {
+  type        = bool
+  description = "ECS clusters, services and tasks as capacity workloads."
+  default     = true
+}
+
+variable "enable_eks" {
+  type        = bool
+  description = <<-EOT
+    EKS clusters and node groups.
+
+    This is the AWS-side view only (cluster, nodegroups, versions). Reading what
+    runs *inside* the cluster needs the kubernetes-rbac module as well, because
+    EKS authorises that separately through the cluster's own RBAC.
+  EOT
+  default     = true
+}
+
+variable "enable_lambda" {
+  type        = bool
+  description = "Lambda functions as capacity workloads."
+  default     = true
+}
+
+variable "enable_load_balancing" {
+  type        = bool
+  description = <<-EOT
+    Load balancers and target groups: where "the service is down" is usually
+    first visible, and how a workload maps to the traffic reaching it.
+  EOT
+  default     = true
+}
+
+variable "enable_databases" {
+  type        = bool
+  description = <<-EOT
+    RDS and ElastiCache metadata and configuration. No data-plane access exists
+    in these actions — nothing here can read rows or keys.
+  EOT
   default     = true
 }
 
@@ -88,36 +145,37 @@ variable "enable_logs" {
   default     = true
 }
 
-variable "enable_ecs" {
-  type        = bool
-  description = "ECS clusters and services as capacity workloads."
-  default     = true
-}
-
-variable "enable_lambda" {
-  type        = bool
-  description = "Lambda functions as capacity workloads."
-  default     = true
-}
-
 variable "enable_cloudtrail" {
   type        = bool
-  description = "CloudTrail LookupEvents, so an investigation can answer \"who changed what\"."
+  description = "CloudTrail, so an investigation can answer \"who changed what\"."
   default     = true
 }
 
 variable "enable_xray" {
   type        = bool
   description = "X-Ray trace summaries for latency investigations."
-  default     = false
+  default     = true
+}
+
+variable "enable_tagging" {
+  type        = bool
+  description = <<-EOT
+    The resource tagging API, which resolves ownership across every service at
+    once. Without it, deriving an owner means asking each service separately
+    and missing anything neither side knows about.
+  EOT
+  default     = true
 }
 
 variable "enable_bedrock" {
   type        = bool
   description = <<-EOT
     Bedrock model access, only if you point SRE Agent's AI provider at Bedrock
-    in your own account. Off by default: InvokeModel bills you directly, and
-    most deployments use the platform's configured provider instead.
+    in your own account.
+
+    Off by default, and the one block here that is not read-only: InvokeModel
+    bills you directly. Most deployments use the platform's configured provider
+    instead.
   EOT
   default     = false
 }
