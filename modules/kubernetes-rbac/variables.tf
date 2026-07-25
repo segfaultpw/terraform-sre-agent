@@ -28,7 +28,7 @@ variable "enable_metrics" {
     Grant metrics.k8s.io (pods, nodes). Requires metrics-server in the cluster.
 
     Without it the capacity page shows requests but no usage, which reads as
-    "nothing is over-provisioned" rather than as missing data — so leave this
+    "nothing is over-provisioned" rather than as missing data, so leave this
     on unless you know metrics-server is absent.
   EOT
   default     = true

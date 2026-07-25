@@ -4,7 +4,7 @@ The permissions SRE Agent needs, as reviewable Terraform rather than a policy
 you paste out of a doc.
 
 The read policy covers the **service-wide read surface** for workloads,
-observability and tagging — deliberately wider than the exact calls the product
+observability and tagging. That is deliberately wider than the exact calls the product
 makes today.
 
 That is a trade, so it is worth stating plainly. A policy pinned to today's call
@@ -20,7 +20,7 @@ Nothing in the read modules can create, modify or delete.
 
 | Module | What it does | Grants |
 |---|---|---|
-| [`aws-readonly`](modules/aws-readonly) | The role SRE Agent assumes to read your AWS account | Read-only across EC2, Auto Scaling, ECS, EKS, Lambda, load balancers, RDS/ElastiCache metadata, CloudWatch, Logs, CloudTrail, X-Ray and tagging. Bedrock opt-in. |
+| [`aws-readonly`](modules/aws-readonly) | The role SRE Agent assumes to read your AWS account | Broad control-plane read across compute, storage, databases, streaming, networking, observability, cost and tagging. Bedrock opt-in. |
 | [`aws-ssm-remediation`](modules/aws-ssm-remediation) | Opt-in command execution for automated remediation | `ssm:SendCommand`, scoped by instance tag and SSM document |
 | [`kubernetes-rbac`](modules/kubernetes-rbac) | Read-only cluster access | `get`/`list` on pods, nodes, namespaces, services, deployments, replicasets, jobs, cronjobs, plus metrics and events |
 
@@ -30,18 +30,18 @@ Both values you need are shown on the AWS data-source form in SRE Agent:
 **Settings → Data sources → add or edit an AWS source → auth type "assume
 role"**.
 
-- **ExternalId** — generated for your organization. Do not invent your own: the
+- **ExternalId**: generated for your organization. Do not invent your own: the
   platform sends the value it issued, and a mismatch denies every `AssumeRole`.
-- **Principal to trust** — the identity that assumes your role. The same for
+- **Principal to trust**: the identity that assumes your role. The same for
   every customer.
 
 Neither is a secret, and the ARNs in this repository are samples. The principal
-grants nothing on its own — every request must also carry your ExternalId,
+grants nothing on its own, because every request must also carry your ExternalId,
 which is the whole point of the condition.
 
 ```hcl
 module "sre_agent_readonly" {
-  source = "github.com/segfaultpw/terraform-sre-agent//modules/aws-readonly?ref=v1.0.0"
+  source = "github.com/segfaultpw/terraform-sre-agent//modules/aws-readonly?ref=v2.0.0"
 
   external_id           = "the-value-from-the-settings-page"
   trusted_principal_arn = "arn:aws:iam::111122223333:role/sre-agent-platform"
@@ -92,7 +92,7 @@ the specific remediations you are willing to automate and pass it as
 Semantic versioning, tagged per release. Always pin:
 
 ```hcl
-source = "github.com/segfaultpw/terraform-sre-agent//modules/aws-readonly?ref=v1.0.0"
+source = "github.com/segfaultpw/terraform-sre-agent//modules/aws-readonly?ref=v2.0.0"
 ```
 
 A **minor** bump can add a permission, because the product gained a feature that
@@ -113,7 +113,7 @@ A **major** bump changes variables or removes permissions.
 ## EKS needs both modules
 
 `enable_eks` grants the AWS-side view: clusters, node groups, versions. It does
-**not** let SRE Agent see what runs inside the cluster — EKS authorises that
+**not** let SRE Agent see what runs inside the cluster. EKS authorises that
 separately through the cluster's own RBAC. For workloads, pods and utilization,
 apply `kubernetes-rbac` against the cluster as well.
 

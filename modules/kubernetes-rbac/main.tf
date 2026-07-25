@@ -47,7 +47,7 @@ resource "kubernetes_cluster_role_v1" "this" {
   }
 
   # Utilization. Without metrics-server installed these calls fail and the
-  # capacity page reports requests without usage — which reads as "nothing is
+  # capacity page reports requests without usage, which reads as "nothing is
   # over-provisioned" rather than as missing data, so it is worth checking.
   dynamic "rule" {
     for_each = var.enable_metrics ? [1] : []

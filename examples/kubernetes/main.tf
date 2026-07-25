@@ -18,7 +18,7 @@ provider "kubernetes" {
 module "sre_agent_rbac" {
   # Relative path so this example is validated in CI. When you copy it, use the
   # published module and pin a version:
-  #   source = "github.com/segfaultpw/terraform-sre-agent//modules/kubernetes-rbac?ref=v1.0.0"
+  #   source = "github.com/segfaultpw/terraform-sre-agent//modules/kubernetes-rbac?ref=v2.0.0"
   source = "../../modules/kubernetes-rbac"
 
   namespace = "kube-system"

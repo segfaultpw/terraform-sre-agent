@@ -1,149 +1,275 @@
 /**
  * Read-only AWS access for SRE Agent.
  *
- * Creates the role SRE Agent assumes to read your account, and a policy
- * covering the workload surface it inspects.
+ * Broad by design: better FinOps estimates, better capacity planning, and
+ * better correlation during an investigation all come from seeing more of the
+ * account, not less. You cannot tell whether a volume is waste without knowing
+ * what it is attached to, and you cannot tie an incident to a change without
+ * seeing both.
  *
- * Scope note: this is deliberately the *service-wide read surface* rather than
- * the exact list of API calls the product makes today. Two reasons. A policy
- * pinned to today's call list needs re-applying every time a feature ships,
- * and the failure when it is stale is silent — a missing permission and "there
- * is nothing to report" render identically in this product. Read access to
- * describe/list operations on compute, observability and tagging is also the
- * grant most organisations already model as low risk.
+ * ## The line this policy draws
  *
- * Every statement is still read-only: nothing here can create, modify or
- * delete. Toggle off any service you do not want inspected.
+ * **Control plane, not data plane.** SRE Agent reads the *shape* of your
+ * infrastructure: what exists, how it is configured, what it costs, what
+ * changed. Never the data inside it.
+ *
+ * So this grants `s3:ListBucket` and `s3:GetBucketTagging` but not
+ * `s3:GetObject`; `dynamodb:DescribeTable` but not `GetItem`, `Query` or
+ * `Scan`; `kinesis:DescribeStream` but not `GetRecords`;
+ * `secretsmanager:DescribeSecret` but not `GetSecretValue`;
+ * `ssm:DescribeParameters` but not `GetParameter`.
+ *
+ * That is deliberately a different line from AWS's own `ReadOnlyAccess` managed
+ * policy, which *does* include `s3:Get*` and `dynamodb:GetItem` and would let
+ * this role read your customers' data. If you were about to reach for
+ * `ReadOnlyAccess` because it is easier, that is the reason not to.
+ *
+ * Everything here is read-only: nothing can create, modify or delete.
  */
 
 locals {
-  # Each block names the feature it powers. `Describe*`/`List*`/`Get*` mirrors
-  # how AWS's own ReadOnlyAccess policies are shaped, so it is a familiar grant
-  # to review.
+  # Grouped rather than one toggle per service: at this breadth a per-service
+  # list is unreviewable, and the groups match how people actually reason about
+  # what they are willing to expose.
   statements = {
-    # Instances, volumes, elastic IPs, snapshots, AMIs, security groups,
-    # subnets, VPCs. Capacity planning and every FinOps waste detector.
-    ec2 = {
-      enabled = var.enable_ec2
-      actions = ["ec2:Describe*"]
-    }
-
-    # Auto Scaling groups: the thing that actually decides how many instances a
-    # workload has, so capacity without it is a snapshot rather than a trend.
-    autoscaling = {
-      enabled = var.enable_autoscaling
+    # --- Compute -----------------------------------------------------------
+    # Instances, EBS volumes, EIPs, snapshots, AMIs, security groups, subnets
+    # and VPCs all arrive via ec2:Describe*. Capacity planning and most FinOps
+    # waste detectors are built on this group.
+    compute = {
+      enabled = var.enable_compute
       actions = [
+        "ec2:Describe*",
         "autoscaling:Describe*",
-      ]
-    }
-
-    ecs = {
-      enabled = var.enable_ecs
-      actions = [
         "ecs:List*",
         "ecs:Describe*",
-      ]
-    }
-
-    # EKS cluster metadata. Note this is the AWS-side view (cluster, nodegroups,
-    # versions); reading what runs *inside* the cluster needs the
-    # kubernetes-rbac module as well, since EKS authorises that separately
-    # through the cluster's own RBAC.
-    eks = {
-      enabled = var.enable_eks
-      actions = [
         "eks:List*",
         "eks:Describe*",
-      ]
-    }
-
-    lambda = {
-      enabled = var.enable_lambda
-      actions = [
         "lambda:List*",
         "lambda:Get*",
+        "elasticbeanstalk:Describe*",
+        "elasticbeanstalk:List*",
+        "batch:Describe*",
+        "batch:List*",
       ]
     }
 
-    # Load balancers and target groups: where "the service is down" is usually
-    # first visible, and how a workload maps to the traffic reaching it.
-    elb = {
-      enabled = var.enable_load_balancing
+    # --- Storage -----------------------------------------------------------
+    # Bucket and filesystem *configuration*: class, lifecycle, tags, versioning.
+    # This is what turns "you have 400 buckets" into "this one has no lifecycle
+    # rule and is costing you".
+    #
+    # Excludes s3:GetObject. Listing a bucket's keys is included because
+    # inventory needs it; reading their contents is not.
+    storage = {
+      enabled = var.enable_storage
       actions = [
-        "elasticloadbalancing:Describe*",
+        "s3:ListAllMyBuckets",
+        "s3:ListBucket",
+        "s3:GetBucketLocation",
+        "s3:GetBucketTagging",
+        "s3:GetBucketVersioning",
+        "s3:GetBucketPublicAccessBlock",
+        "s3:GetLifecycleConfiguration",
+        "s3:GetEncryptionConfiguration",
+        "s3:GetIntelligentTieringConfiguration",
+        "s3:GetStorageLensConfiguration",
+        "elasticfilesystem:Describe*",
+        "fsx:Describe*",
+        "fsx:List*",
+        "backup:Describe*",
+        "backup:List*",
       ]
     }
 
-    # Managed data stores a workload depends on. Metadata and configuration
-    # only — no data-plane access exists in these actions.
+    # --- Databases ---------------------------------------------------------
+    # Metadata, configuration and sizing. DescribeTable tells you a table's
+    # capacity mode; GetItem would tell you what is in it, so it is absent.
     databases = {
       enabled = var.enable_databases
       actions = [
         "rds:Describe*",
         "rds:List*",
+        "dynamodb:DescribeTable",
+        "dynamodb:DescribeTimeToLive",
+        "dynamodb:DescribeContinuousBackups",
+        "dynamodb:DescribeGlobalTable",
+        "dynamodb:DescribeLimits",
+        "dynamodb:ListTables",
+        "dynamodb:ListTagsOfResource",
+        "dynamodb:ListGlobalTables",
+        "dynamodb:ListBackups",
         "elasticache:Describe*",
         "elasticache:List*",
+        "redshift:Describe*",
+        "memorydb:Describe*",
       ]
     }
 
-    # Metrics for SLIs, capacity utilization and the idle-resource detectors,
-    # plus alarm state for correlation during an investigation.
-    cloudwatch = {
-      enabled = var.enable_cloudwatch
+    # --- Streaming and messaging -------------------------------------------
+    # Stream and queue shape, not payloads: DescribeStream but not GetRecords,
+    # GetQueueAttributes but not ReceiveMessage.
+    streaming = {
+      enabled = var.enable_streaming
+      actions = [
+        "kinesis:DescribeStream",
+        "kinesis:DescribeStreamSummary",
+        "kinesis:DescribeLimits",
+        "kinesis:ListStreams",
+        "kinesis:ListShards",
+        "kinesis:ListTagsForStream",
+        "firehose:DescribeDeliveryStream",
+        "firehose:ListDeliveryStreams",
+        "firehose:ListTagsForDeliveryStream",
+        "sqs:GetQueueAttributes",
+        "sqs:ListQueues",
+        "sqs:ListQueueTags",
+        "sns:GetTopicAttributes",
+        "sns:GetSubscriptionAttributes",
+        "sns:List*",
+        "kafka:Describe*",
+        "kafka:List*",
+        "events:Describe*",
+        "events:List*",
+      ]
+    }
+
+    # --- Networking --------------------------------------------------------
+    # How traffic reaches a workload, and where "the service is down" is usually
+    # first visible. VPC, subnet and security-group detail arrives via
+    # ec2:Describe* in the compute group.
+    networking = {
+      enabled = var.enable_networking
+      actions = [
+        "elasticloadbalancing:Describe*",
+        "route53:Get*",
+        "route53:List*",
+        "route53resolver:Get*",
+        "route53resolver:List*",
+        "cloudfront:Get*",
+        "cloudfront:List*",
+        "apigateway:GET",
+        "directconnect:Describe*",
+        "globalaccelerator:Describe*",
+        "globalaccelerator:List*",
+      ]
+    }
+
+    # --- Observability -----------------------------------------------------
+    # Metrics, logs, traces, and the change history an investigation correlates
+    # against. logs:StopQuery is write-shaped but only cancels a query this role
+    # started.
+    observability = {
+      enabled = var.enable_observability
       actions = [
         "cloudwatch:Describe*",
         "cloudwatch:Get*",
         "cloudwatch:List*",
-      ]
-    }
-
-    # Log search during investigations, including Insights queries. StopQuery
-    # is a write-shaped action that only cancels a query this role started.
-    logs = {
-      enabled = var.enable_logs
-      actions = [
         "logs:Describe*",
         "logs:Get*",
         "logs:List*",
         "logs:FilterLogEvents",
         "logs:StartQuery",
         "logs:StopQuery",
-      ]
-    }
-
-    # "Who changed what" during an investigation.
-    cloudtrail = {
-      enabled = var.enable_cloudtrail
-      actions = [
+        "xray:Get*",
+        "xray:BatchGet*",
         "cloudtrail:LookupEvents",
         "cloudtrail:Describe*",
         "cloudtrail:Get*",
+        "health:Describe*",
+        "applicationinsights:Describe*",
+        "applicationinsights:List*",
       ]
     }
 
-    xray = {
-      enabled = var.enable_xray
+    # --- Cost --------------------------------------------------------------
+    # What things actually cost, rather than what a price list says they cost.
+    # Compute Optimizer is AWS's own rightsizing analysis, which is stronger
+    # evidence than inferring from CPU alone.
+    #
+    # Note that ce: and pricing: calls are themselves billed per request.
+    cost = {
+      enabled = var.enable_cost
       actions = [
-        "xray:Get*",
-        "xray:BatchGet*",
+        "ce:Get*",
+        "ce:Describe*",
+        "ce:List*",
+        "budgets:Describe*",
+        "budgets:View*",
+        "cur:Describe*",
+        "pricing:Get*",
+        "pricing:Describe*",
+        "savingsplans:Describe*",
+        "savingsplans:List*",
+        "compute-optimizer:Get*",
+        "compute-optimizer:Describe*",
+        "cost-optimization-hub:Get*",
+        "cost-optimization-hub:List*",
       ]
     }
 
-    # The tagging API resolves ownership across every service at once. Without
-    # it, deriving an owner means asking each service separately and missing
-    # anything neither module knows about.
-    tagging = {
-      enabled = var.enable_tagging
+    # --- Ownership and governance ------------------------------------------
+    # The tagging API resolves ownership across every service at once, instead
+    # of asking each one separately and missing whatever neither side knows.
+    governance = {
+      enabled = var.enable_governance
       actions = [
         "tag:GetResources",
         "tag:GetTagKeys",
         "tag:GetTagValues",
+        "resource-groups:Get*",
+        "resource-groups:List*",
+        "config:Describe*",
+        "config:Get*",
+        "config:List*",
+        "organizations:Describe*",
+        "organizations:List*",
+        "servicequotas:Get*",
+        "servicequotas:List*",
+        "sts:GetCallerIdentity",
       ]
     }
 
+    # --- Identity ----------------------------------------------------------
+    # Turns a CloudTrail entry from "some principal" into "this role", which is
+    # the difference between a timeline and an explanation.
+    #
+    # Exposes your principal inventory (names, policies, last-used), though no
+    # credentials. Separate toggle for anyone who would rather it did not.
+    identity = {
+      enabled = var.enable_identity_read
+      actions = [
+        "iam:Get*",
+        "iam:List*",
+        "iam:GenerateServiceLastAccessedDetails",
+      ]
+    }
+
+    # --- Inventory ---------------------------------------------------------
+    # Existence and configuration of things the groups above do not name, so a
+    # service nobody thought of still shows up.
+    inventory = {
+      enabled = var.enable_inventory
+      actions = [
+        "ssm:DescribeInstanceInformation",
+        "ssm:DescribeParameters",
+        "ssm:ListTagsForResource",
+        "ssm:GetInventory",
+        "ssm:GetInventorySchema",
+        "secretsmanager:ListSecrets",
+        "secretsmanager:DescribeSecret",
+        "ecr:Describe*",
+        "ecr:List*",
+        "ecr:GetLifecyclePolicy",
+        "states:Describe*",
+        "states:List*",
+      ]
+    }
+
+    # --- Bedrock (not read-only) -------------------------------------------
     # Only if you point SRE Agent's AI provider at Bedrock in your own account.
-    # Off by default: this is the one block that is not read-only (InvokeModel
-    # bills you directly), and most deployments use the platform's provider.
+    # Off by default: InvokeModel bills you directly, and most deployments use
+    # the platform's configured provider.
     bedrock = {
       enabled = var.enable_bedrock
       actions = [
@@ -158,14 +284,14 @@ locals {
 }
 
 # Fail during plan rather than handing over a role that grants nothing. An
-# operator who disabled every service has almost certainly misread the
-# variables, and a role with an empty policy fails later as opaque AccessDenied
-# errors inside the product.
+# operator who disabled every group has almost certainly misread the variables,
+# and a role with an empty policy fails later as opaque AccessDenied errors
+# inside the product.
 resource "terraform_data" "at_least_one_service" {
   lifecycle {
     precondition {
       condition     = length(local.enabled_statements) > 0
-      error_message = "At least one service must be enabled, otherwise this role grants nothing."
+      error_message = "At least one service group must be enabled, otherwise this role grants nothing."
     }
   }
 }
@@ -175,12 +301,12 @@ data "aws_iam_policy_document" "readonly" {
   # `statement`, which reads as if the block were referring to itself.
   dynamic "statement" {
     for_each = local.enabled_statements
-    iterator = svc
+    iterator = group
 
     content {
-      sid       = title(svc.key)
+      sid       = title(group.key)
       effect    = "Allow"
-      actions   = svc.value.actions
+      actions   = group.value.actions
       resources = ["*"]
     }
   }
@@ -198,7 +324,7 @@ data "aws_iam_policy_document" "trust" {
 
     # The ExternalId is what stops the confused deputy: without it, anyone who
     # learns your role ARN and can get the platform to call AssumeRole on their
-    # behalf reaches your account. SRE Agent generates one per organization —
+    # behalf reaches your account. SRE Agent generates one per organization;
     # copy it from the data-source settings page, never invent your own.
     condition {
       test     = "StringEquals"
@@ -220,7 +346,7 @@ resource "aws_iam_role" "this" {
 
 resource "aws_iam_policy" "this" {
   name        = var.policy_name
-  description = "Read access SRE Agent uses to inspect workloads in this account"
+  description = "Read access SRE Agent uses to inspect this account (control plane only)"
   policy      = data.aws_iam_policy_document.readonly.json
 
   tags = var.tags

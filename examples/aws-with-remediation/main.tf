@@ -20,7 +20,7 @@ provider "aws" {
 module "sre_agent_readonly" {
   # Relative path so this example is validated in CI. When you copy it, use the
   # published module and pin a version:
-  #   source = "github.com/segfaultpw/terraform-sre-agent//modules/aws-readonly?ref=v1.0.0"
+  #   source = "github.com/segfaultpw/terraform-sre-agent//modules/aws-readonly?ref=v2.0.0"
   source = "../../modules/aws-readonly"
 
   external_id           = var.external_id
@@ -30,7 +30,7 @@ module "sre_agent_readonly" {
 module "sre_agent_remediation" {
   # Relative path so this example is validated in CI. When you copy it, use the
   # published module and pin a version:
-  #   source = "github.com/segfaultpw/terraform-sre-agent//modules/aws-ssm-remediation?ref=v1.0.0"
+  #   source = "github.com/segfaultpw/terraform-sre-agent//modules/aws-ssm-remediation?ref=v2.0.0"
   source = "../../modules/aws-ssm-remediation"
 
   external_id           = var.external_id

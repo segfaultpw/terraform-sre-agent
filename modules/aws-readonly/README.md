@@ -9,7 +9,7 @@ Nothing here can create, modify or delete anything in your account.
 
 ```hcl
 module "sre_agent_readonly" {
-  source = "github.com/segfaultpw/terraform-sre-agent//modules/aws-readonly?ref=v1.0.0"
+  source = "github.com/segfaultpw/terraform-sre-agent//modules/aws-readonly?ref=v2.0.0"
 
   external_id           = "the-value-from-the-settings-page"
   trusted_principal_arn = "arn:aws:iam::111122223333:role/sre-agent-platform"
@@ -18,7 +18,7 @@ module "sre_agent_readonly" {
 
 ## What each toggle buys you
 
-Wider than the exact calls made today, on purpose — see the repository README
+Wider than the exact calls made today, on purpose. See the repository README
 for why. Turning one off is safe: the feature degrades to "no data" rather than
 erroring, which is worth knowing, because **an empty page and a missing
 permission look the same**. If something reads as empty, check the policy before
@@ -29,7 +29,7 @@ concluding there is nothing to report.
 | `enable_ec2` | `true` | Capacity planning and every FinOps waste detector. Without it those pages read as empty. |
 | `enable_autoscaling` | `true` | ASGs decide how many instances a workload has; without them capacity is a snapshot, not a trend. |
 | `enable_ecs` | `true` | ECS clusters, services and tasks as workloads. |
-| `enable_eks` | `true` | EKS clusters and node groups (AWS-side only — see below). |
+| `enable_eks` | `true` | EKS clusters and node groups (AWS-side only, see below). |
 | `enable_lambda` | `true` | Lambda functions as workloads. |
 | `enable_load_balancing` | `true` | Load balancers and target groups: where "the service is down" is usually first visible. |
 | `enable_databases` | `true` | RDS and ElastiCache metadata and configuration. No data-plane access exists in these actions. |
@@ -50,7 +50,7 @@ is authorised separately by the cluster's own RBAC, so apply
 
 This includes `DescribeInstanceAttribute`, which can return an instance's user
 data. If your bootstrap scripts embed secrets, that is worth knowing before you
-apply — the fix is to stop embedding them, but you should make that call
+apply. The fix is to stop embedding them, but you should make that call
 knowingly rather than discover it later.
 
 ## Inputs

@@ -10,7 +10,7 @@ granting them would be authority nobody uses.
 
 ```hcl
 module "sre_agent_rbac" {
-  source = "github.com/segfaultpw/terraform-sre-agent//modules/kubernetes-rbac?ref=v1.0.0"
+  source = "github.com/segfaultpw/terraform-sre-agent//modules/kubernetes-rbac?ref=v2.0.0"
 
   namespace = "kube-system"
 }
@@ -38,7 +38,7 @@ terraform output -raw token   # paste into the Kubernetes connector
 ## Two things worth deciding rather than defaulting
 
 **`enable_metrics`** requires metrics-server. Without it the capacity page shows
-requests but no usage — which reads as "nothing is over-provisioned" rather than
+requests but no usage, which reads as "nothing is over-provisioned" rather than
 as missing data. Leave it on unless you know metrics-server is absent.
 
 **`enable_events`** is the most useful signal during an investigation

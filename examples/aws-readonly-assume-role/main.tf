@@ -18,7 +18,7 @@ provider "aws" {
 module "sre_agent_readonly" {
   # Relative path so this example is validated in CI. When you copy it, use the
   # published module and pin a version:
-  #   source = "github.com/segfaultpw/terraform-sre-agent//modules/aws-readonly?ref=v1.0.0"
+  #   source = "github.com/segfaultpw/terraform-sre-agent//modules/aws-readonly?ref=v2.0.0"
   source = "../../modules/aws-readonly"
 
   # Both values are shown on the AWS data-source form in SRE Agent:

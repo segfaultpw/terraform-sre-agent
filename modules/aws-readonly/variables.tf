@@ -69,57 +69,36 @@ variable "tags" {
   default     = {}
 }
 
-# --- Service toggles --------------------------------------------------------
-# Each maps to a product feature. Turning one off is safe: the feature that
-# needs it degrades to "no data" rather than erroring — which is worth knowing,
-# because an empty page and a missing permission look identical in this
-# product. If something reads as empty, check the policy before concluding
-# there is nothing to report.
+# --- Service groups ---------------------------------------------------------
+# Grouped rather than one toggle per service: at this breadth a per-service list
+# is unreviewable, and these groups match how people reason about what they are
+# willing to expose.
+#
+# Turning one off is safe: the feature that needs it degrades to "no data"
+# rather than erroring. That is worth knowing, because an empty page and a
+# missing permission look identical in this product. If something reads as
+# empty, check the policy before concluding there is nothing to report.
 
-variable "enable_ec2" {
-  type        = bool
-  description = "EC2 read surface. Required for capacity planning and the FinOps waste detectors."
-  default     = true
-}
-
-variable "enable_autoscaling" {
+variable "enable_compute" {
   type        = bool
   description = <<-EOT
-    Auto Scaling groups. These decide how many instances a workload actually
-    has, so capacity without them is a snapshot rather than a trend.
+    EC2 (instances, EBS volumes, EIPs, snapshots, AMIs, security groups,
+    subnets, VPCs), Auto Scaling, ECS, EKS, Lambda, Elastic Beanstalk, Batch.
+
+    Capacity planning and most FinOps waste detectors are built on this group.
   EOT
   default     = true
 }
 
-variable "enable_ecs" {
-  type        = bool
-  description = "ECS clusters, services and tasks as capacity workloads."
-  default     = true
-}
-
-variable "enable_eks" {
+variable "enable_storage" {
   type        = bool
   description = <<-EOT
-    EKS clusters and node groups.
+    S3 bucket configuration, EFS, FSx and Backup.
 
-    This is the AWS-side view only (cluster, nodegroups, versions). Reading what
-    runs *inside* the cluster needs the kubernetes-rbac module as well, because
-    EKS authorises that separately through the cluster's own RBAC.
-  EOT
-  default     = true
-}
-
-variable "enable_lambda" {
-  type        = bool
-  description = "Lambda functions as capacity workloads."
-  default     = true
-}
-
-variable "enable_load_balancing" {
-  type        = bool
-  description = <<-EOT
-    Load balancers and target groups: where "the service is down" is usually
-    first visible, and how a workload maps to the traffic reaching it.
+    Configuration only: lifecycle rules, storage class, tags, versioning: the
+    things that turn "you have 400 buckets" into "this one has no lifecycle
+    rule". Bucket *listing* is included because inventory needs it;
+    `s3:GetObject` is not, so object contents stay unreadable.
   EOT
   default     = true
 }
@@ -127,42 +106,97 @@ variable "enable_load_balancing" {
 variable "enable_databases" {
   type        = bool
   description = <<-EOT
-    RDS and ElastiCache metadata and configuration. No data-plane access exists
-    in these actions — nothing here can read rows or keys.
+    RDS, DynamoDB, ElastiCache, Redshift and MemoryDB metadata and sizing.
+
+    No data-plane reads: `DescribeTable` tells you a table's capacity mode,
+    `GetItem` would tell you what is in it and is absent.
   EOT
   default     = true
 }
 
-variable "enable_cloudwatch" {
-  type        = bool
-  description = "CloudWatch metrics and alarm state. Required for SLIs and utilization."
-  default     = true
-}
-
-variable "enable_logs" {
-  type        = bool
-  description = "CloudWatch Logs search during investigations, including Insights queries."
-  default     = true
-}
-
-variable "enable_cloudtrail" {
-  type        = bool
-  description = "CloudTrail, so an investigation can answer \"who changed what\"."
-  default     = true
-}
-
-variable "enable_xray" {
-  type        = bool
-  description = "X-Ray trace summaries for latency investigations."
-  default     = true
-}
-
-variable "enable_tagging" {
+variable "enable_streaming" {
   type        = bool
   description = <<-EOT
-    The resource tagging API, which resolves ownership across every service at
-    once. Without it, deriving an owner means asking each service separately
-    and missing anything neither side knows about.
+    Kinesis, Firehose, SQS, SNS, MSK and EventBridge.
+
+    Stream and queue shape, not payloads: `DescribeStream` but not
+    `GetRecords`, `GetQueueAttributes` but not `ReceiveMessage`.
+  EOT
+  default     = true
+}
+
+variable "enable_networking" {
+  type        = bool
+  description = <<-EOT
+    Load balancers, Route 53, CloudFront, API Gateway, Direct Connect and
+    Global Accelerator: how traffic reaches a workload, and where "the service
+    is down" is usually first visible.
+  EOT
+  default     = true
+}
+
+variable "enable_observability" {
+  type        = bool
+  description = <<-EOT
+    CloudWatch metrics and alarms, CloudWatch Logs (including Insights
+    queries), X-Ray traces, CloudTrail and AWS Health.
+
+    Without CloudWatch nothing is ever "idle" or "oversized", because there is
+    no utilization to judge it by.
+  EOT
+  default     = true
+}
+
+variable "enable_cost" {
+  type        = bool
+  description = <<-EOT
+    Cost Explorer, Budgets, Pricing, Savings Plans, Compute Optimizer and Cost
+    Optimization Hub.
+
+    This is the difference between estimating savings from a hard-coded price
+    list and reporting what the account is actually billed. Compute Optimizer
+    in particular is AWS's own rightsizing analysis, which is stronger evidence
+    than inferring from CPU alone.
+
+    Note that Cost Explorer and Pricing API calls are themselves billed per
+    request.
+  EOT
+  default     = true
+}
+
+variable "enable_governance" {
+  type        = bool
+  description = <<-EOT
+    Resource tagging, Resource Groups, AWS Config, Organizations and Service
+    Quotas.
+
+    The tagging API resolves ownership across every service at once, instead of
+    asking each one separately and missing whatever neither side knows about.
+  EOT
+  default     = true
+}
+
+variable "enable_identity_read" {
+  type        = bool
+  description = <<-EOT
+    IAM read: turns a CloudTrail entry from "some principal" into "this role",
+    which is the difference between a timeline and an explanation.
+
+    Exposes your principal inventory (names, attached policies, last-used),
+    though no credentials. Its own toggle for anyone who would rather it did
+    not.
+  EOT
+  default     = true
+}
+
+variable "enable_inventory" {
+  type        = bool
+  description = <<-EOT
+    SSM inventory, Secrets Manager metadata, ECR and Step Functions: existence
+    and configuration of things the other groups do not name.
+
+    Secrets are listed and described, never read: `GetSecretValue` is absent,
+    as is `ssm:GetParameter`.
   EOT
   default     = true
 }
@@ -173,7 +207,7 @@ variable "enable_bedrock" {
     Bedrock model access, only if you point SRE Agent's AI provider at Bedrock
     in your own account.
 
-    Off by default, and the one block here that is not read-only: InvokeModel
+    Off by default, and the one group here that is not read-only: `InvokeModel`
     bills you directly. Most deployments use the platform's configured provider
     instead.
   EOT

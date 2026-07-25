@@ -14,7 +14,7 @@ you observability, and the two want different review cadences.
 
 ```hcl
 module "sre_agent_remediation" {
-  source = "github.com/segfaultpw/terraform-sre-agent//modules/aws-ssm-remediation?ref=v1.0.0"
+  source = "github.com/segfaultpw/terraform-sre-agent//modules/aws-ssm-remediation?ref=v2.0.0"
 
   external_id           = "the-value-from-the-settings-page"
   trusted_principal_arn = "arn:aws:iam::111122223333:role/sre-agent-platform"
@@ -38,7 +38,7 @@ aws ec2 create-tags --resources i-0123456789abcdef0 \
 `target_instance_tags` limits **where** a command can run. An instance must
 carry every tag listed.
 
-`allowed_documents` limits **what** can run — and only if you replace the
+`allowed_documents` limits **what** can run, and only if you replace the
 default. `AWS-RunShellScript` accepts any shell, so tag scoping alone gives you
 "arbitrary commands, on these hosts". For a genuinely bounded grant, publish
 your own document containing the specific remediations you are willing to
@@ -59,7 +59,7 @@ fail, not succeed quietly.
 |---|---|
 | `ssm:SendCommand` | Run the remediation. Scoped to tagged instances and allowed documents. |
 | `ssm:GetCommandInvocation`, `ssm:ListCommandInvocations`, `ssm:ListCommands` | Read back what happened. Starting work it cannot report on is worse than not starting. |
-| `ssm:DescribeInstanceInformation` | Tell "instance offline" from "command failed" — different incidents. |
+| `ssm:DescribeInstanceInformation` | Tell "instance offline" from "command failed", which are different incidents. |
 
 ## Inputs
 

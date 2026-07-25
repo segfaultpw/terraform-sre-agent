@@ -4,11 +4,42 @@ Semantic versioning. **Read this before upgrading**: with these modules a minor
 bump can widen access to your account, and that should be a decision rather
 than a `terraform apply`.
 
-- **major** — variables changed, or permissions removed
-- **minor** — a permission added, because the product gained a feature needing it
-- **patch** — documentation, validation, formatting; no change to what is granted
+- **major**: variables changed, or permissions removed
+- **minor**: a permission added, because the product gained a feature needing it
+- **patch**: documentation, validation, formatting; no change to what is granted
 
-## [Unreleased]
+## [2.0.0]
+
+### Changed (breaking)
+- `aws-readonly` now takes **service-group** toggles instead of one per
+  service. `enable_ec2`, `enable_ecs`, `enable_eks`, `enable_lambda`,
+  `enable_autoscaling` and `enable_load_balancing` are replaced by
+  `enable_compute` and `enable_networking`; `enable_cloudwatch`,
+  `enable_logs`, `enable_cloudtrail` and `enable_xray` by
+  `enable_observability`. At this breadth a per-service list was unreviewable.
+
+### Added
+- Much wider read coverage, so FinOps savings, capacity planning and incident
+  correlation all have more to work with: S3 (configuration), EFS, FSx, Backup,
+  DynamoDB, Redshift, MemoryDB, Kinesis, Firehose, SQS, SNS, MSK, EventBridge,
+  Route 53, CloudFront, API Gateway, Direct Connect, Global Accelerator,
+  Elastic Beanstalk, Batch, ECR, Step Functions, AWS Health and Service Quotas.
+- A `cost` group: Cost Explorer, Budgets, Pricing, Savings Plans, Compute
+  Optimizer and Cost Optimization Hub. This is the difference between
+  estimating savings from a hard-coded price list and reporting what the
+  account is actually billed.
+- An `identity` group (IAM read), which turns a CloudTrail entry from "some
+  principal" into "this role".
+- A `governance` group: tagging, Resource Groups, Config, Organizations.
+
+### Security
+- The policy draws an explicit **control plane, not data plane** line, and it
+  is verified rather than asserted: no `s3:GetObject`, `dynamodb:GetItem`,
+  `kinesis:GetRecords`, `sqs:ReceiveMessage`, `secretsmanager:GetSecretValue`
+  or `ssm:GetParameter`. This is deliberately narrower than AWS's own
+  `ReadOnlyAccess`, which includes several of those.
+
+## [1.0.0]
 
 ### Added
 - `aws-readonly`: the role SRE Agent assumes to read an AWS account, covering
