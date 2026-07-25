@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Pinned rather than floating: a formatting change in a new Terraform
+      # release would otherwise fail CI on a PR that changed nothing.
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.8
+
+      - name: Check formatting
+        run: terraform fmt -check -recursive -diff
+
+      - name: Validate every module and example
+        run: |
+          set -euo pipefail
+          failed=0
+          for dir in modules/*/ examples/*/; do
+            echo "==> $dir"
+            if ! (cd "$dir" && terraform init -backend=false -input=false > /dev/null && terraform validate); then
+              failed=1
+            fi
+          done
+          exit $failed
+
+  tflint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: terraform-linters/setup-tflint@v4
+        with:
+          tflint_version: latest
+      - name: Lint
+        run: |
+          set -euo pipefail
+          for dir in modules/*/; do
+            echo "==> $dir"
+            (cd "$dir" && tflint --init && tflint)
+          done
