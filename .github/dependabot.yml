@@ -1,0 +1,32 @@
+version: 2
+
+# Only GitHub Actions, and the omission is deliberate.
+#
+# There is no `terraform` entry here, which looks wrong in a Terraform
+# repository. The reason: every constraint in modules/*/versions.tf is an open
+# lower bound (`>= 5.0`, `>= 2.24`, `>= 1.5`) and there are no
+# .terraform.lock.hcl files anywhere. Those bounds are this repository's
+# published API -- they tell consumers "works with anything from here up" --
+# so the only thing Dependabot could change is the *minimum* a consumer is
+# allowed to use, which is a breaking change for everyone pinning to this
+# module and belongs in a considered major release, not an unattended pull
+# request.
+#
+# If lock files or bounded constraints (`~> 5.0`) ever appear here, add a
+# terraform entry then: at that point there is something to update that does
+# not change what consumers are allowed to run.
+
+updates:
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: sunday
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: ci
+      include: scope
+    groups:
+      actions:
+        patterns:
+          - "*"
