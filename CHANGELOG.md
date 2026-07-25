@@ -8,6 +8,13 @@ than a `terraform apply`.
 - **minor**: a permission added, because the product gained a feature needing it
 - **patch**: documentation, validation, formatting; no change to what is granted
 
+## [2.0.1]
+
+### Fixed
+- The read-only example still passed `enable_xray`, removed in 2.0.0. The
+  modules themselves were unaffected, but the example did not validate. Caught
+  by CI, which is what it is for.
+
 ## [2.0.0]
 
 ### Changed (breaking)

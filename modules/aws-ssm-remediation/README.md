@@ -14,7 +14,7 @@ you observability, and the two want different review cadences.
 
 ```hcl
 module "sre_agent_remediation" {
-  source = "github.com/segfaultpw/terraform-sre-agent//modules/aws-ssm-remediation?ref=v2.0.0"
+  source = "github.com/segfaultpw/terraform-sre-agent//modules/aws-ssm-remediation?ref=v2.0.1"
 
   external_id           = "the-value-from-the-settings-page"
   trusted_principal_arn = "arn:aws:iam::111122223333:role/sre-agent-platform"

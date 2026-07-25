@@ -18,7 +18,7 @@ provider "aws" {
 module "sre_agent_readonly" {
   # Relative path so this example is validated in CI. When you copy it, use the
   # published module and pin a version:
-  #   source = "github.com/segfaultpw/terraform-sre-agent//modules/aws-readonly?ref=v2.0.0"
+  #   source = "github.com/segfaultpw/terraform-sre-agent//modules/aws-readonly?ref=v2.0.1"
   source = "../../modules/aws-readonly"
 
   # Both values are shown on the AWS data-source form in SRE Agent:
@@ -27,9 +27,9 @@ module "sre_agent_readonly" {
   external_id           = var.external_id
   trusted_principal_arn = var.trusted_principal_arn
 
-  # Trim to what you actually want read. Everything defaults on except X-Ray
-  # and Bedrock.
-  enable_xray = true
+  # Every group defaults on except Bedrock. Turn off anything you would rather
+  # not have inspected; the feature that needs it then reports no data.
+  enable_identity_read = true
 
   tags = {
     ManagedBy = "terraform"

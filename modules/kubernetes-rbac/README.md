@@ -10,7 +10,7 @@ granting them would be authority nobody uses.
 
 ```hcl
 module "sre_agent_rbac" {
-  source = "github.com/segfaultpw/terraform-sre-agent//modules/kubernetes-rbac?ref=v2.0.0"
+  source = "github.com/segfaultpw/terraform-sre-agent//modules/kubernetes-rbac?ref=v2.0.1"
 
   namespace = "kube-system"
 }
