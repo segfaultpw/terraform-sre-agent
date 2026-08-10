@@ -138,9 +138,19 @@ locals {
     # How traffic reaches a workload, and where "the service is down" is usually
     # first visible. VPC, subnet and security-group detail arrives via
     # ec2:Describe* in the compute group.
+    #
+    # ACM sits here because a certificate is TLS termination for the load
+    # balancers, CloudFront distributions and API Gateways in this same group,
+    # and an expiring one takes them all down together. Describe and List only:
+    # acm:GetCertificate and acm:ExportCertificate are deliberately absent,
+    # because Export hands back the private key of an exportable certificate,
+    # which is data rather than shape.
     networking = {
       enabled = var.enable_networking
       actions = [
+        "acm:DescribeCertificate",
+        "acm:ListCertificates",
+        "acm:ListTagsForCertificate",
         "elasticloadbalancing:Describe*",
         "route53:Get*",
         "route53:List*",

@@ -128,9 +128,13 @@ variable "enable_streaming" {
 variable "enable_networking" {
   type        = bool
   description = <<-EOT
-    Load balancers, Route 53, CloudFront, API Gateway, Direct Connect and
-    Global Accelerator: how traffic reaches a workload, and where "the service
+    Load balancers, Route 53, CloudFront, API Gateway, Direct Connect, Global
+    Accelerator and ACM: how traffic reaches a workload, and where "the service
     is down" is usually first visible.
+
+    ACM certificates are listed and described so their expiry can be watched
+    before it takes an endpoint down. The private key is never reachable:
+    `acm:ExportCertificate` is absent.
   EOT
   default     = true
 }
