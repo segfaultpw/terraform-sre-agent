@@ -1,0 +1,121 @@
+# Cuts a release when a releasable commit reaches main with green CI.
+#
+# The bump comes from conventional commits since the last tag: a subject with
+# `!` before the colon or a BREAKING CHANGE footer is major, `feat:` is minor,
+# `fix:` is patch. Anything else (docs, ci, chore, style, test) accumulates
+# silently into the next real release — the CHANGELOG's own contract says what
+# each level MEANS, not that every commit must release.
+#
+# The changelog is the human gate, deliberately: with these modules a minor
+# bump can widen access to a customer's account, so the release decision is
+# expressed by writing the CHANGELOG section for the new version. If a
+# releasable commit lands without one, this workflow FAILS — loudly, on
+# purpose — instead of tagging a release nobody described. That failure is
+# the reminder that a release is due.
+#
+# Tags created here are annotated but unsigned (CI holds no signing key);
+# hand-cut releases can keep being signed, the workflow skips versions that
+# already have a tag.
+name: Release
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Tag and release
+    runs-on: ubuntu-latest
+    if: github.event.workflow_run.conclusion == 'success'
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Compute the bump from commits since the last tag
+        id: bump
+        run: |
+          set -euo pipefail
+          last=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          if [ -z "$last" ]; then
+            echo "No tags yet; refusing to guess a first version." >&2
+            echo "level=none" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          subjects=$(git log --format=%s "$last"..HEAD)
+          bodies=$(git log --format=%b "$last"..HEAD)
+
+          level=none
+          echo "$subjects" | grep -qE '^(feat|fix)(\(.*\))?!:' && level=major
+          echo "$bodies" | grep -q 'BREAKING CHANGE' && level=major
+          if [ "$level" = none ]; then
+            echo "$subjects" | grep -qE '^feat(\(.*\))?:' && level=minor
+          fi
+          if [ "$level" = none ]; then
+            echo "$subjects" | grep -qE '^fix(\(.*\))?:' && level=patch
+          fi
+
+          if [ "$level" = none ]; then
+            echo "Nothing releasable since $last."
+            echo "level=none" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          base=${last#v}
+          IFS=. read -r maj min pat <<< "$base"
+          case "$level" in
+            major) next="$((maj + 1)).0.0" ;;
+            minor) next="$maj.$((min + 1)).0" ;;
+            patch) next="$maj.$min.$((pat + 1))" ;;
+          esac
+
+          echo "level=$level" >> "$GITHUB_OUTPUT"
+          echo "last=$last" >> "$GITHUB_OUTPUT"
+          echo "next=v$next" >> "$GITHUB_OUTPUT"
+          echo "Releasable: $level ($last -> v$next)"
+
+      - name: Refuse to release a version the changelog does not describe
+        if: steps.bump.outputs.level != 'none'
+        run: |
+          set -euo pipefail
+          next="${{ steps.bump.outputs.next }}"
+          if git rev-parse -q --verify "refs/tags/$next" >/dev/null; then
+            echo "$next already exists (hand-cut); nothing to do."
+            echo "SKIP=true" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          if ! grep -q "^## \[${next#v}\]" CHANGELOG.md; then
+            echo "::error::Commits since ${{ steps.bump.outputs.last }} call for a" \
+              "${{ steps.bump.outputs.level }} release ($next), but CHANGELOG.md has no" \
+              "## [${next#v}] section. Write the entry - that IS the release decision -" \
+              "and push it; this workflow will then tag it."
+            exit 1
+          fi
+
+      - name: Extract the changelog section as release notes
+        if: steps.bump.outputs.level != 'none' && env.SKIP != 'true'
+        run: |
+          set -euo pipefail
+          next="${{ steps.bump.outputs.next }}"
+          awk -v ver="${next#v}" '
+            $0 == "## [" ver "]" {grab=1; next}
+            grab && /^## \[/ {exit}
+            grab {print}
+          ' CHANGELOG.md > /tmp/notes.md
+          test -s /tmp/notes.md
+
+      - name: Tag and publish
+        if: steps.bump.outputs.level != 'none' && env.SKIP != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          next="${{ steps.bump.outputs.next }}"
+          gh release create "$next" --target "$GITHUB_SHA" \
+            --title "$next" --notes-file /tmp/notes.md

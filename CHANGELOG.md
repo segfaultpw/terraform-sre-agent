@@ -8,6 +8,24 @@ than a `terraform apply`.
 - **minor**: a permission added, because the product gained a feature needing it
 - **patch**: documentation, validation, formatting; no change to what is granted
 
+## [2.1.0]
+
+### Added
+- `aws-readonly`: ACM read joins the networking group —
+  `acm:DescribeCertificate`, `acm:ListCertificates` and
+  `acm:ListTagsForCertificate` — so the product can discover the account's
+  certificates and watch their expiry before it takes an endpoint down.
+  `acm:GetCertificate` and `acm:ExportCertificate` stay deliberately absent:
+  Export returns the private key of an exportable certificate, which is data,
+  not shape.
+
+### Changed
+- Releases now cut themselves: when a `feat:` or `fix:` commit reaches main
+  with green CI, the release workflow computes the bump from the commit
+  messages (`feat!`/`BREAKING` major, `feat` minor, `fix` patch) and refuses
+  to release until this file carries a section for that version. Writing the
+  changelog entry IS the release decision; the tagging is just mechanics.
+
 ## [2.0.1]
 
 ### Fixed
