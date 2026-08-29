@@ -193,6 +193,20 @@ variable "enable_identity_read" {
   default     = true
 }
 
+variable "enable_verification" {
+  type        = bool
+  description = <<-EOT
+    iam:SimulatePrincipalPolicy, scoped to this role's own ARN, so the
+    product's Verify button can ask IAM "does this role allow what the app
+    derived?" and answer with evidence instead of "unverified".
+
+    Read-only, and it can simulate nothing but the role it rides on. Refuse it
+    and everything else keeps working; the app just can no longer tell you
+    whether it does.
+  EOT
+  default     = true
+}
+
 variable "enable_inventory" {
   type        = bool
   description = <<-EOT

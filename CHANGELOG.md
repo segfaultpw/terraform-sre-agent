@@ -8,6 +8,25 @@ than a `terraform apply`.
 - **minor**: a permission added, because the product gained a feature needing it
 - **patch**: documentation, validation, formatting; no change to what is granted
 
+## [2.2.0]
+
+### Added
+- `aws-readonly`, `aws-ssm-remediation`: an optional `Verification` statement,
+  `iam:SimulatePrincipalPolicy` scoped to the module's own role ARN, behind
+  `enable_verification` (default `true`). It is what lets the product's Verify
+  button (Settings &rarr; Infrastructure &rarr; "Required AWS permissions") ask
+  IAM whether the role really allows what the app derived and answer with
+  evidence instead of "unverified". Read-only, and it can simulate nothing but
+  the role it rides on; a role built from these modules before this version can
+  do everything except be verified, which is exactly the diagnostic the button
+  shows.
+
+### Fixed
+- `aws-readonly` README: the toggle table still documented the per-service
+  variables 2.0.0 replaced (`enable_ec2`, `enable_ecs`, ...), so a reader
+  following it wrote variables `terraform plan` refuses. It now documents the
+  real grouped toggles.
+
 ## [2.1.0]
 
 ### Added

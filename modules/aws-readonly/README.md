@@ -9,7 +9,7 @@ Nothing here can create, modify or delete anything in your account.
 
 ```hcl
 module "sre_agent_readonly" {
-  source = "github.com/segfaultpw/terraform-sre-agent//modules/aws-readonly?ref=v2.0.1"
+  source = "github.com/segfaultpw/terraform-sre-agent//modules/aws-readonly?ref=v2.2.0"
 
   external_id           = "the-value-from-the-settings-page"
   trusted_principal_arn = "arn:aws:iam::111122223333:role/sre-agent-platform"
@@ -26,23 +26,22 @@ concluding there is nothing to report.
 
 | Variable | Default | Feature it powers |
 |---|---|---|
-| `enable_ec2` | `true` | Capacity planning and every FinOps waste detector. Without it those pages read as empty. |
-| `enable_autoscaling` | `true` | ASGs decide how many instances a workload has; without them capacity is a snapshot, not a trend. |
-| `enable_ecs` | `true` | ECS clusters, services and tasks as workloads. |
-| `enable_eks` | `true` | EKS clusters and node groups (AWS-side only, see below). |
-| `enable_lambda` | `true` | Lambda functions as workloads. |
-| `enable_load_balancing` | `true` | Load balancers and target groups: where "the service is down" is usually first visible. |
-| `enable_databases` | `true` | RDS and ElastiCache metadata and configuration. No data-plane access exists in these actions. |
-| `enable_cloudwatch` | `true` | SLIs, utilization, alarm correlation. Without it nothing is ever "idle" or "oversized". |
-| `enable_logs` | `true` | Log search during investigations, including Insights. |
-| `enable_cloudtrail` | `true` | "Who changed what" during an investigation. |
-| `enable_xray` | `true` | Trace summaries for latency work. |
-| `enable_tagging` | `true` | Resolves ownership across every service at once. Without it, ownership is derived service by service and misses anything neither side knows about. |
+| `enable_compute` | `true` | EC2, Auto Scaling, ECS, EKS, Lambda, Beanstalk and Batch as workloads: capacity planning and most FinOps waste detectors. Without it those pages read as empty. |
+| `enable_storage` | `true` | S3, EFS, FSx and Backup *configuration*: lifecycle, versioning, tags. Never object contents. |
+| `enable_databases` | `true` | RDS, DynamoDB, ElastiCache, Redshift and MemoryDB metadata and configuration. No data-plane access exists in these actions. |
+| `enable_streaming` | `true` | Kinesis, Firehose, MSK, SQS, SNS and EventBridge shape and tags. Never a record or a message. |
+| `enable_networking` | `true` | Load balancers, CloudFront, API Gateway, Direct Connect, Global Accelerator, and ACM certificate expiry: where "the service is down" is usually first visible. |
+| `enable_observability` | `true` | CloudWatch metrics and alarms, Logs (including Insights), CloudTrail lookups, X-Ray, Health and Application Insights: SLIs, log search, "who changed what". |
+| `enable_cost` | `true` | Cost Explorer, CUR, budgets, Savings Plans, Compute Optimizer and the Price List: the FinOps pages price from your bill instead of a stored table. |
+| `enable_governance` | `true` | Config, Organizations, quotas, resource groups and tagging: resolves ownership across every service at once. |
+| `enable_identity_read` | `true` | The IAM inventory behind the Security page's findings, and CloudTrail principal resolution. Names, policies and last-used, never credentials. |
+| `enable_inventory` | `true` | SSM inventory, Secrets Manager metadata (never values), ECR and Step Functions: existence of things the other groups do not name. |
+| `enable_verification` | `true` | `iam:SimulatePrincipalPolicy`, scoped to this role's own ARN: the Verify button answers with evidence instead of "unverified". |
 | `enable_bedrock` | `false` | Only if you point SRE Agent's AI provider at Bedrock in *your* account. The one block that is not read-only: `InvokeModel` bills you directly. |
 
 ### EKS needs the Kubernetes module too
 
-`enable_eks` grants the AWS-side view only. Reading what runs inside the cluster
+The compute group grants the AWS-side EKS view only. Reading what runs inside the cluster
 is authorised separately by the cluster's own RBAC, so apply
 `kubernetes-rbac` as well if you want pods, workloads and utilization.
 

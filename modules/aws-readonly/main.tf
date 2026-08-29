@@ -320,6 +320,22 @@ data "aws_iam_policy_document" "readonly" {
       resources = ["*"]
     }
   }
+
+  # Outside the group map because it is the one statement here that is NOT
+  # resource "*": it can simulate only the role it rides on, so the product's
+  # Verify button can check this role against what the app derived without a
+  # single write. Its own toggle for the same reason the groups have theirs;
+  # refuse it and only the verification stops working.
+  dynamic "statement" {
+    for_each = var.enable_verification ? [1] : []
+
+    content {
+      sid       = "Verification"
+      effect    = "Allow"
+      actions   = ["iam:SimulatePrincipalPolicy"]
+      resources = [aws_iam_role.this.arn]
+    }
+  }
 }
 
 data "aws_iam_policy_document" "trust" {

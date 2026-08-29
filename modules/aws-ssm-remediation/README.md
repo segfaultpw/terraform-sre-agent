@@ -60,6 +60,7 @@ fail, not succeed quietly.
 | `ssm:SendCommand` | Run the remediation. Scoped to tagged instances and allowed documents. |
 | `ssm:GetCommandInvocation`, `ssm:ListCommandInvocations`, `ssm:ListCommands` | Read back what happened. Starting work it cannot report on is worse than not starting. |
 | `ssm:DescribeInstanceInformation` | Tell "instance offline" from "command failed", which are different incidents. |
+| `iam:SimulatePrincipalPolicy` (own role ARN only) | The Verify button checks this role against what the app derived, without a write. Behind `enable_verification`. |
 
 ## Inputs
 
@@ -74,6 +75,7 @@ fail, not succeed quietly.
 | `aws_partition` | `string` | `"aws"` | no |
 | `role_name` / `policy_name` | `string` | `"sre-agent-remediation"` | no |
 | `max_session_duration` | `number` | `3600` | no |
+| `enable_verification` | `bool` | `true` | no |
 | `permissions_boundary_arn` | `string` | `null` | no |
 | `tags` | `map(string)` | `{}` | no |
 

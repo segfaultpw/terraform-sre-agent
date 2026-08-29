@@ -41,7 +41,7 @@ which is the whole point of the condition.
 
 ```hcl
 module "sre_agent_readonly" {
-  source = "github.com/segfaultpw/terraform-sre-agent//modules/aws-readonly?ref=v2.1.0"
+  source = "github.com/segfaultpw/terraform-sre-agent//modules/aws-readonly?ref=v2.2.0"
 
   external_id           = "the-value-from-the-settings-page"
   trusted_principal_arn = "arn:aws:iam::111122223333:role/sre-agent-platform"
@@ -92,7 +92,7 @@ the specific remediations you are willing to automate and pass it as
 Semantic versioning, tagged per release. Always pin:
 
 ```hcl
-source = "github.com/segfaultpw/terraform-sre-agent//modules/aws-readonly?ref=v2.1.0"
+source = "github.com/segfaultpw/terraform-sre-agent//modules/aws-readonly?ref=v2.2.0"
 ```
 
 A **minor** bump can add a permission, because the product gained a feature that
@@ -112,7 +112,8 @@ A **major** bump changes variables or removes permissions.
 
 ## EKS needs both modules
 
-`enable_eks` grants the AWS-side view: clusters, node groups, versions. It does
+The compute group (`enable_compute`) grants the AWS-side EKS view: clusters,
+node groups, versions. It does
 **not** let SRE Agent see what runs inside the cluster. EKS authorises that
 separately through the cluster's own RBAC. For workloads, pods and utilization,
 apply `kubernetes-rbac` against the cluster as well.

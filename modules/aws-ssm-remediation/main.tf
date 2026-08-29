@@ -95,6 +95,21 @@ data "aws_iam_policy_document" "remediation" {
     actions   = ["ssm:DescribeInstanceInformation"]
     resources = ["*"]
   }
+
+  # The one statement here that names this role itself: it can simulate only
+  # the role it rides on, so the product's Verify button can check this role
+  # against what the app derived without a single write. Refuse it and only
+  # the verification stops working.
+  dynamic "statement" {
+    for_each = var.enable_verification ? [1] : []
+
+    content {
+      sid       = "Verification"
+      effect    = "Allow"
+      actions   = ["iam:SimulatePrincipalPolicy"]
+      resources = [aws_iam_role.this.arn]
+    }
+  }
 }
 
 data "aws_iam_policy_document" "trust" {
