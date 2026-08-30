@@ -8,6 +8,22 @@ than a `terraform apply`.
 - **minor**: a permission added, because the product gained a feature needing it
 - **patch**: documentation, validation, formatting; no change to what is granted
 
+## [2.3.0]
+
+### Added
+- `aws-readonly`: the compliance posture scan's reads. The `identity` group
+  (`enable_identity_read`) gains `iam:GenerateCredentialReport` plus
+  `sso:Describe*`, `sso:List*`, `identitystore:Describe*` and
+  `identitystore:List*`; the `compute` group (`enable_compute`) gains
+  `ec2:GetEbsEncryptionByDefault`. Together with reads the groups already
+  carried (trails, log groups, RDS and volume describes), these are what the
+  product's Compliance page computes account evidence from: root and password
+  hygiene from the credential report (key ages and MFA facts, never secrets),
+  who reaches the account through Identity Center, and whether new EBS volumes
+  encrypt by default. Every addition is a read; the `Generate*` verbs only
+  compute reports. Refuse any of it and the affected controls report no data
+  and name the missing grant.
+
 ## [2.2.0]
 
 ### Added

@@ -40,6 +40,9 @@ locals {
       enabled = var.enable_compute
       actions = [
         "ec2:Describe*",
+        # Get*, not Describe*: the account's EBS encryption-by-default bit,
+        # read by the compliance posture scan for encryption evidence.
+        "ec2:GetEbsEncryptionByDefault",
         "autoscaling:Describe*",
         "ecs:List*",
         "ecs:Describe*",
@@ -246,12 +249,23 @@ locals {
     #
     # Exposes your principal inventory (names, policies, last-used), though no
     # credentials. Separate toggle for anyone who would rather it did not.
+    #
+    # GenerateCredentialReport and the sso/identitystore reads joined in v2.3
+    # for the compliance posture scan: the credential report carries key ages
+    # and MFA facts (never secrets), and Identity Center is how "who can reach
+    # this account" gets answered when people arrive through SSO rather than
+    # as IAM users. The Generate* verbs here only compute reports.
     identity = {
       enabled = var.enable_identity_read
       actions = [
         "iam:Get*",
         "iam:List*",
         "iam:GenerateServiceLastAccessedDetails",
+        "iam:GenerateCredentialReport",
+        "sso:Describe*",
+        "sso:List*",
+        "identitystore:Describe*",
+        "identitystore:List*",
       ]
     }
 

@@ -26,7 +26,7 @@ concluding there is nothing to report.
 
 | Variable | Default | Feature it powers |
 |---|---|---|
-| `enable_compute` | `true` | EC2, Auto Scaling, ECS, EKS, Lambda, Beanstalk and Batch as workloads: capacity planning and most FinOps waste detectors. Without it those pages read as empty. |
+| `enable_compute` | `true` | EC2, Auto Scaling, ECS, EKS, Lambda, Beanstalk and Batch as workloads: capacity planning and most FinOps waste detectors. Also the account's EBS encryption-by-default bit, which the compliance posture scan reads. Without it those pages read as empty. |
 | `enable_storage` | `true` | S3, EFS, FSx and Backup *configuration*: lifecycle, versioning, tags. Never object contents. |
 | `enable_databases` | `true` | RDS, DynamoDB, ElastiCache, Redshift and MemoryDB metadata and configuration. No data-plane access exists in these actions. |
 | `enable_streaming` | `true` | Kinesis, Firehose, MSK, SQS, SNS and EventBridge shape and tags. Never a record or a message. |
@@ -34,7 +34,7 @@ concluding there is nothing to report.
 | `enable_observability` | `true` | CloudWatch metrics and alarms, Logs (including Insights), CloudTrail lookups, X-Ray, Health and Application Insights: SLIs, log search, "who changed what". |
 | `enable_cost` | `true` | Cost Explorer, CUR, budgets, Savings Plans, Compute Optimizer and the Price List: the FinOps pages price from your bill instead of a stored table. |
 | `enable_governance` | `true` | Config, Organizations, quotas, resource groups and tagging: resolves ownership across every service at once. |
-| `enable_identity_read` | `true` | The IAM inventory behind the Security page's findings, and CloudTrail principal resolution. Names, policies and last-used, never credentials. |
+| `enable_identity_read` | `true` | The IAM inventory behind the Security page's findings, CloudTrail principal resolution, and (since v2.3) the compliance posture scan's credential report and Identity Center reads. Names, policies, key ages, MFA facts and last-used, never credentials. |
 | `enable_inventory` | `true` | SSM inventory, Secrets Manager metadata (never values), ECR and Step Functions: existence of things the other groups do not name. |
 | `enable_verification` | `true` | `iam:SimulatePrincipalPolicy`, scoped to this role's own ARN: the Verify button answers with evidence instead of "unverified". |
 | `enable_bedrock` | `false` | Only if you point SRE Agent's AI provider at Bedrock in *your* account. The one block that is not read-only: `InvokeModel` bills you directly. |

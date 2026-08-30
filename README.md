@@ -20,7 +20,7 @@ Nothing in the read modules can create, modify or delete.
 
 | Module | What it does | Grants |
 |---|---|---|
-| [`aws-readonly`](modules/aws-readonly) | The role SRE Agent assumes to read your AWS account | Broad control-plane read across compute, storage, databases, streaming, networking, observability, cost and tagging. Bedrock opt-in. |
+| [`aws-readonly`](modules/aws-readonly) | The role SRE Agent assumes to read your AWS account | Broad control-plane read across compute, storage, databases, streaming, networking, observability, cost, tagging and identity (IAM inventory, credential report, Identity Center; the compliance evidence rides these). Bedrock opt-in. |
 | [`aws-ssm-remediation`](modules/aws-ssm-remediation) | Opt-in command execution for automated remediation | `ssm:SendCommand`, scoped by instance tag and SSM document |
 | [`kubernetes-rbac`](modules/kubernetes-rbac) | Read-only cluster access | `get`/`list` on pods, nodes, namespaces, services, deployments, replicasets, jobs, cronjobs, plus metrics and events |
 
