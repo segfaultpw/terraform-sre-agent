@@ -110,13 +110,21 @@ A **major** bump changes variables or removes permissions.
 | `hashicorp/aws` | >= 5.0 |
 | `hashicorp/kubernetes` | >= 2.24 |
 
-## EKS needs both modules
+## EKS: what each module lets SRE Agent see
 
-The compute group (`enable_compute`) grants the AWS-side EKS view: clusters,
-node groups, versions. It does
-**not** let SRE Agent see what runs inside the cluster. EKS authorises that
-separately through the cluster's own RBAC. For workloads, pods and utilization,
-apply `kubernetes-rbac` against the cluster as well.
+`aws-readonly` alone is enough for SRE Agent to find your EKS clusters and the
+workloads running in them. The compute group (`enable_compute`) grants
+`eks:ListClusters` and `eks:DescribeCluster`, and the observability group
+(`enable_observability`) grants `cloudwatch:ListMetrics`, which is how the
+product reads each workload's name, namespace and cluster from Container
+Insights' metric dimensions. No kubeconfig is involved. This needs Container
+Insights enabled on the cluster (the CloudWatch Observability add-on with
+`containerInsights` on); a cluster without it is still listed, with no
+workloads under it.
+
+`kubernetes-rbac` is for reading the cluster's own API, which EKS authorises
+separately through the cluster's RBAC: the security findings scan and live
+Kubernetes resources. Apply it against the cluster as well if you want those.
 
 ## Verifying what you granted
 

@@ -8,6 +8,17 @@ than a `terraform apply`.
 - **minor**: a permission added, because the product gained a feature needing it
 - **patch**: documentation, validation, formatting; no change to what is granted
 
+## [2.3.1]
+
+### Fixed
+- Documentation: the READMEs said EKS workloads need the `kubernetes-rbac`
+  module. SRE Agent now discovers EKS clusters and their workloads from
+  `aws-readonly` alone, through `eks:ListClusters` and `eks:DescribeCluster`
+  (compute group) and Container Insights' metric dimensions via
+  `cloudwatch:ListMetrics` (observability group), both already granted.
+  `kubernetes-rbac` is still what reads the cluster's own API. No change to
+  what either module grants.
+
 ## [2.3.0]
 
 ### Added

@@ -39,11 +39,15 @@ concluding there is nothing to report.
 | `enable_verification` | `true` | `iam:SimulatePrincipalPolicy`, scoped to this role's own ARN: the Verify button answers with evidence instead of "unverified". |
 | `enable_bedrock` | `false` | Only if you point SRE Agent's AI provider at Bedrock in *your* account. The one block that is not read-only: `InvokeModel` bills you directly. |
 
-### EKS needs the Kubernetes module too
+### EKS clusters and their workloads
 
-The compute group grants the AWS-side EKS view only. Reading what runs inside the cluster
-is authorised separately by the cluster's own RBAC, so apply
-`kubernetes-rbac` as well if you want pods, workloads and utilization.
+`enable_compute` (`eks:ListClusters`, `eks:DescribeCluster`) together with
+`enable_observability` (`cloudwatch:ListMetrics`) is all SRE Agent needs to list
+your EKS clusters and the workloads in them: workload names, namespaces and
+clusters come from Container Insights' metric dimensions, with no kubeconfig.
+Container Insights must be enabled on the cluster. Reading the cluster's own
+API (security findings, live Kubernetes resources) is authorised separately by
+the cluster's RBAC, so apply `kubernetes-rbac` as well if you want those.
 
 ### A note on `ec2:Describe*`
 
