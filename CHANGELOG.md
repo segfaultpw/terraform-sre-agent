@@ -8,6 +8,19 @@ than a `terraform apply`.
 - **minor**: a permission added, because the product gained a feature needing it
 - **patch**: documentation, validation, formatting; no change to what is granted
 
+## [2.4.0]
+
+### Added
+- `aws-iam-hygiene`: a new module, the role behind SRE Agent's AWS IAM hygiene
+  connector (`aws_iam`). It grants `iam:GetUser`, `iam:ListAccessKeys` and
+  `iam:GetAccessKeyLastUsed` to read who holds an access key and when it was
+  last used, and `iam:UpdateAccessKey` (behind `enable_key_changes`, default
+  `true`) to set a key Active or Inactive, all on `arn:aws:iam::<account>:user/*`.
+  The Verify button's `iam:SimulatePrincipalPolicy`, scoped to the role's own
+  ARN, is behind `enable_verification` as in the other modules. It never
+  deletes or creates a key and touches no user, policy or login. Nothing
+  existing changes: the module only adds a role when you apply it.
+
 ## [2.3.1]
 
 ### Fixed

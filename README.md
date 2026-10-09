@@ -22,6 +22,7 @@ Nothing in the read modules can create, modify or delete.
 |---|---|---|
 | [`aws-readonly`](modules/aws-readonly) | The role SRE Agent assumes to read your AWS account | Broad control-plane read across compute, storage, databases, streaming, networking, observability, cost, tagging and identity (IAM inventory, credential report, Identity Center; the compliance evidence rides these). Bedrock opt-in. |
 | [`aws-ssm-remediation`](modules/aws-ssm-remediation) | Opt-in command execution for automated remediation | `ssm:SendCommand`, scoped by instance tag and SSM document |
+| [`aws-iam-hygiene`](modules/aws-iam-hygiene) | The role behind the AWS IAM hygiene connector (`aws_iam`), so self-healing can deactivate an access key unused for 90 days | `iam:GetUser`, `iam:ListAccessKeys`, `iam:GetAccessKeyLastUsed` and `iam:UpdateAccessKey` on the account's users. Never deletes or creates a key. |
 | [`kubernetes-rbac`](modules/kubernetes-rbac) | Read-only cluster access | `get`/`list` on pods, nodes, namespaces, services, deployments, replicasets, jobs, cronjobs, plus metrics and events |
 
 ## Start here
@@ -54,6 +55,14 @@ output "role_arn" {
 
 Apply, then paste `role_arn` into the AWS data source. Working examples are in
 [`examples/`](examples).
+
+## The IAM hygiene role
+
+Self-healing's Security area can deactivate an IAM access key that has not been used for 90
+days. It does that through a connector of its own, type **AWS IAM hygiene**, with a role of its
+own, which [`aws-iam-hygiene`](modules/aws-iam-hygiene) builds. Neither `aws-readonly` nor
+`aws-ssm-remediation` is enough for it, and nothing that reads your account ever uses it. See
+[`examples/aws-iam-hygiene`](examples/aws-iam-hygiene).
 
 ## Why a role rather than an access key
 
