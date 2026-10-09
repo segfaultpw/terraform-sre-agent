@@ -175,16 +175,7 @@ locals {
     # hammering it. OPTIONAL: without this group detection still works from DNS,
     # metrics and logs, and the product says which inputs it did not read. The
     # CloudFront and load balancer reads it also uses are in the networking group;
-    # API Gateway has its own opt-in group below.
-    # --- API Gateway (traffic protection, opt-in) ---------------------------
-    # IAM names every API Gateway read GET, and stage variables, where some teams
-    # keep secrets, are readable through it. So it is its own group, off by default,
-    # and its NoApiKeyValues deny below exists only where this allow does.
-    apigateway = {
-      enabled = var.enable_apigateway_read
-      actions = ["apigateway:GET"]
-    }
-
+    # API Gateway has its own opt-in group after it.
     waf = {
       enabled = var.enable_waf_read
       actions = [
@@ -195,6 +186,15 @@ locals {
         "wafv2:GetSampledRequests",
         "wafv2:GetRateBasedStatementManagedKeys",
       ]
+    }
+
+    # --- API Gateway (traffic protection, opt-in) ---------------------------
+    # IAM names every API Gateway read GET, and stage variables, where some teams
+    # keep secrets, are readable through it. So it is its own group, off by default,
+    # and its NoApiKeyValues deny below exists only where this allow does.
+    apigateway = {
+      enabled = var.enable_apigateway_read
+      actions = ["apigateway:GET"]
     }
 
     # --- Observability -----------------------------------------------------

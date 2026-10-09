@@ -42,7 +42,7 @@ which is the whole point of the condition.
 
 ```hcl
 module "sre_agent_readonly" {
-  source = "github.com/segfaultpw/terraform-sre-agent//modules/aws-readonly?ref=v2.2.0"
+  source = "github.com/segfaultpw/terraform-sre-agent//modules/aws-readonly?ref=v3.0.0"
 
   external_id           = "the-value-from-the-settings-page"
   trusted_principal_arn = "arn:aws:iam::111122223333:role/sre-agent-platform"
@@ -101,7 +101,7 @@ the specific remediations you are willing to automate and pass it as
 Semantic versioning, tagged per release. Always pin:
 
 ```hcl
-source = "github.com/segfaultpw/terraform-sre-agent//modules/aws-readonly?ref=v2.2.0"
+source = "github.com/segfaultpw/terraform-sre-agent//modules/aws-readonly?ref=v3.0.0"
 ```
 
 A **minor** bump can add a permission, because the product gained a feature that
