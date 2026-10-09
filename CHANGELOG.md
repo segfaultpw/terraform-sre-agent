@@ -8,7 +8,7 @@ than a `terraform apply`.
 - **minor**: a permission added, because the product gained a feature needing it
 - **patch**: documentation, validation, formatting; no change to what is granted
 
-## [2.5.0]
+## [3.0.0]
 
 ### Added
 - `aws-readonly`: a `waf` group behind `enable_waf_read` (default `false`, opt-in):
@@ -22,6 +22,11 @@ than a `terraform apply`.
   `false`, opt-in) holding `apigateway:GET`, with an explicit `NoApiKeyValues` deny
   of the API key resources (`/apikeys`, `/apikeys/*` and the keys of a usage plan).
   The deny exists only where the allow does.
+
+### Upgrading from 2.x (major: a permission was removed)
+- `aws-readonly` no longer grants `apigateway:GET` by default. To keep API Gateway
+  reads set `enable_apigateway_read = true`; to keep (or start) WAF-based client
+  rates set `enable_waf_read = true` (both are off by default).
 
 ### Changed
 - **Behaviour change for `aws-readonly` users who relied on API Gateway reads.**
