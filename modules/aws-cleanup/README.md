@@ -9,9 +9,10 @@ Self-healing's deletions need more than the role: full autonomy for the organiza
 acknowledgement that names deletions, an organization admin's approval below full autonomy, and
 the connector pinned on the area. This module only builds the role.
 
-Separate from `aws-readonly`, `aws-ssm-remediation` and `aws-iam-hygiene` on purpose. No read of
-your account (the capacity, FinOps and security pages, the inventory sweep, the scans) ever uses
-this credential, and a runbook step can never name the connector.
+Separate from `aws-readonly`, `aws-ssm-remediation` and `aws-iam-hygiene` on purpose. No page or
+scan (the capacity, FinOps and security pages, the inventory sweep, the scans) ever uses this
+credential, only the checks a deletion makes about its own target do (they include reading recent
+CloudTrail events with `cloudtrail:LookupEvents`), and a runbook step can never name the connector.
 
 ## Usage
 
@@ -42,8 +43,14 @@ pinned connector is held as `region_mismatch`.
 The policy ends with a Deny of every destructive write the role is granted, on any resource
 tagged `sre-agent:protect` (any value). SRE Agent checks the same tag itself and refuses before it
 calls AWS; the Deny is the second lock, in your account. Allow statements carry no condition,
-because the product's Verify button simulates without request context and would read a conditioned
-Allow as denied; the Verify button never simulates a Deny.
+with one exception: `ec2:CreateTags` is allowed only while a snapshot or a volume is created
+(`ec2:CreateAction` is `CreateSnapshot` or `CreateVolume`), so the role cannot add a tag to an
+existing volume or snapshot, which would be a way around tag-based access control. The Verify
+button passes that context when it simulates, and never simulates a Deny.
+
+**Tag your break-glass IAM users with `sre-agent:protect`.** The Deny covers `iam:DeleteAccessKey`
+and `iam:DeleteLoginProfile` on a tagged user, so their keys and console passwords can never be
+deleted by this role.
 
 ## The Recycle Bin rule
 
@@ -59,7 +66,7 @@ Settings, Infrastructure, Show the policy ("Cleanup role (deletions)").
 | Switch | Writes | Reads that prove it unused |
 |---|---|---|
 | `enable_iam_deletions` | `iam:DeleteAccessKey`, `iam:DeleteLoginProfile` on `user/*` | `iam:GetUser`, `iam:ListAccessKeys`, `iam:GetAccessKeyLastUsed`, `iam:GetLoginProfile`, `iam:ListMFADevices`, `iam:ListGroupsForUser`, the user and group policy listings |
-| `enable_ebs_deletions` | `ec2:CreateSnapshot`, `ec2:CreateTags`, `ec2:CreateVolume`, `ec2:DeleteVolume` on volumes and snapshots of the Region | `ec2:DescribeVolumes`, `ec2:DescribeSnapshots`, `cloudtrail:LookupEvents` |
+| `enable_ebs_deletions` | `ec2:CreateSnapshot`, `ec2:CreateVolume`, `ec2:DeleteVolume`, and `ec2:CreateTags` only while a snapshot or volume is created on volumes and snapshots of the Region | `ec2:DescribeVolumes`, `ec2:DescribeSnapshots`, `cloudtrail:LookupEvents` |
 | `enable_address_release` | `ec2:ReleaseAddress` on `elastic-ip/*` | `ec2:DescribeAddresses`, `ec2:DescribeAddressesAttribute` |
 | `enable_snapshot_image_deletions` | `ec2:DeleteSnapshot`, `ec2:DeregisterImage`, `ec2:RestoreSnapshotFromRecycleBin`, `ec2:RestoreImageFromRecycleBin` | `ec2:DescribeSnapshots`, `ec2:DescribeSnapshotAttribute`, `ec2:DescribeImages`, `ec2:DescribeImageAttribute`, `ec2:DescribeInstances`, `ec2:DescribeLaunchTemplates`, `ec2:DescribeLaunchTemplateVersions`, `autoscaling:DescribeLaunchConfigurations`, `ec2:List*InRecycleBin`, `rbin:ListRules`, `rbin:GetRule` |
 | `enable_log_retention` | `logs:PutRetentionPolicy`, `logs:DeleteRetentionPolicy` on the Region's log groups | `logs:DescribeLogGroups`, `logs:ListTagsForResource`, `cloudtrail:DescribeTrails` |

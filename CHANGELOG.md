@@ -20,7 +20,8 @@ than a `terraform apply`.
   (`ec2:DeleteSnapshot`, `ec2:DeregisterImage`, the Recycle Bin restores and the reads of your
   Recycle Bin rules) and `enable_log_retention` (`logs:PutRetentionPolicy`,
   `logs:DeleteRetentionPolicy`). Writes are scoped to a resource type in the account and
-  `aws_region`, never to one id. A Deny at the end refuses every destructive write the role is
+  `aws_region`, never to one id, and `ec2:CreateTags` is allowed only while a snapshot or volume is
+  created (`ec2:CreateAction`). A Deny at the end refuses every destructive write the role is
   granted on a resource tagged `sre-agent:protect` (any value). Nothing existing changes: the
   module only adds a role when you apply it, and deleting the role stops every deletion.
 - `aws-iam-hygiene`: a Deny of `iam:UpdateAccessKey` for a user tagged `sre-agent:protect` (any

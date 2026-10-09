@@ -7,9 +7,10 @@
  * (while a Recycle Bin rule keeps them), and the retention you choose on a log group that
  * never expires. Deleting this role is the AWS-side kill switch for every one of them.
  *
- * Allow statements carry no Condition, because the product's Verify button simulates
- * without request context and would read a conditioned Allow as denied. The one
- * Condition is on the Deny at the end: every destructive write is refused on a resource
+ * Allow statements carry no Condition, with one exception: `ec2:CreateTags` is allowed
+ * only while a snapshot or volume is created, so the role cannot tag existing resources.
+ * The product's Verify button passes that context when it simulates. The other Condition
+ * is on the Deny at the end: every destructive write is refused on a resource
  * tagged `sre-agent:protect` (any value), whatever SRE Agent decides.
  */
 
@@ -150,8 +151,29 @@ data "aws_iam_policy_document" "cleanup" {
     content {
       sid       = "VolumeSnapshotAndRestore"
       effect    = "Allow"
-      actions   = ["ec2:CreateSnapshot", "ec2:CreateTags", "ec2:CreateVolume"]
+      actions   = ["ec2:CreateSnapshot", "ec2:CreateVolume"]
       resources = [local.volume_arn, local.snapshot_arn]
+    }
+  }
+
+  # Tags are written only while a snapshot or a volume is created. Without the condition the
+  # role could add any tag to any existing volume or snapshot, which is a way around tag-based
+  # access control. This is the one conditioned Allow; the product's Verify button passes the
+  # matching `ec2:CreateAction` context when it simulates.
+  dynamic "statement" {
+    for_each = var.enable_ebs_deletions ? [1] : []
+
+    content {
+      sid       = "TagOnCreateOnly"
+      effect    = "Allow"
+      actions   = ["ec2:CreateTags"]
+      resources = [local.volume_arn, local.snapshot_arn]
+
+      condition {
+        test     = "StringEquals"
+        variable = "ec2:CreateAction"
+        values   = ["CreateSnapshot", "CreateVolume"]
+      }
     }
   }
 
@@ -264,8 +286,9 @@ data "aws_iam_policy_document" "trust" {
 }
 
 # Its own role on purpose, apart from the read-only, the remediation and the IAM hygiene
-# ones: no read of your account ever uses this credential, a runbook step can never name
-# it, and deleting it stops every deletion SRE Agent could make.
+# ones: no page or scan ever uses this credential (only the checks a deletion makes about
+# its own target do, including cloudtrail:LookupEvents), a runbook step can never name it,
+# and deleting it stops every deletion SRE Agent could make.
 resource "aws_iam_role" "this" {
   name                 = var.role_name
   description          = "Deletions SRE Agent may make in this account (${var.external_id})"

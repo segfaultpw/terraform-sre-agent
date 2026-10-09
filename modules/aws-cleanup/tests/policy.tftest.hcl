@@ -41,7 +41,7 @@ run "grants_what_the_product_derives" {
       "Allow|cloudtrail:DescribeTrails|*|",
       "Allow|cloudtrail:LookupEvents|*|",
       "Allow|ec2:CreateSnapshot|arn:aws:ec2:us-east-1:123456789012:volume/*,arn:aws:ec2:us-east-1::snapshot/*|",
-      "Allow|ec2:CreateTags|arn:aws:ec2:us-east-1:123456789012:volume/*,arn:aws:ec2:us-east-1::snapshot/*|",
+      "Allow|ec2:CreateTags|arn:aws:ec2:us-east-1:123456789012:volume/*,arn:aws:ec2:us-east-1::snapshot/*|{\"StringEquals\":{\"ec2:CreateAction\":[\"CreateSnapshot\",\"CreateVolume\"]}}",
       "Allow|ec2:CreateVolume|arn:aws:ec2:us-east-1:123456789012:volume/*,arn:aws:ec2:us-east-1::snapshot/*|",
       "Allow|ec2:DeleteSnapshot|arn:aws:ec2:us-east-1::snapshot/*|",
       "Allow|ec2:DeleteVolume|arn:aws:ec2:us-east-1:123456789012:volume/*|",
