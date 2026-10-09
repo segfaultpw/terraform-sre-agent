@@ -11,23 +11,26 @@ than a `terraform apply`.
 ## [2.5.0]
 
 ### Added
-- `aws-readonly`: a `waf` group behind `enable_waf_read` (default `true`):
+- `aws-readonly`: a `waf` group behind `enable_waf_read` (default `false`, opt-in):
   `wafv2:ListWebACLs`, `wafv2:GetWebACL`, `wafv2:ListResourcesForWebACL`,
   `wafv2:GetLoggingConfiguration`, `wafv2:GetSampledRequests` and
-  `wafv2:GetRateBasedStatementManagedKeys`. Traffic protection reads them to tell
-  which edge stands in front of a service (a web ACL, what it protects, where it
-  logs) and to see who is hammering it (the requests the WAF sampled for a rule and
-  the addresses a rate rule is limiting right now). The group is optional: set
-  `enable_waf_read = false` and detection still works from DNS, metrics and logs,
-  and the product says which inputs it did not read. Every action is a read.
+  `wafv2:GetRateBasedStatementManagedKeys`. Turn it on for WAF-based client rates in
+  traffic protection (which edge stands in front of a service, and who is hammering
+  it). Left off, detection still works from DNS, metrics and logs and the product
+  says which inputs it did not read. Every action is a read.
+- `aws-readonly`: an `apigateway` group behind `enable_apigateway_read` (default
+  `false`, opt-in) holding `apigateway:GET`, with an explicit `NoApiKeyValues` deny
+  of the API key resources (`/apikeys`, `/apikeys/*` and the keys of a usage plan).
+  The deny exists only where the allow does.
 
 ### Changed
-- `aws-readonly`: with `enable_networking` the policy now carries an explicit
-  `NoApiKeyValues` deny of `apigateway:GET` on the API key resources
-  (`/apikeys`, `/apikeys/*`, and the keys of a usage plan). IAM names every API
-  Gateway read `GET`, which includes API key values; the product only needs the
-  shape of the APIs. This removes a read, so a policy copied by hand from before
-  this version should add the same deny.
+- **Behaviour change for `aws-readonly` users who relied on API Gateway reads.**
+  `apigateway:GET` moved out of the `networking` group into the new opt-in
+  `apigateway` group, because IAM names every API Gateway read GET and stage
+  variables, where some teams keep secrets, are readable through it. If you use
+  API Gateway reads (for example for traffic protection), set
+  `enable_apigateway_read = true`; otherwise the role no longer holds them, and a
+  policy copied by hand should drop the action or keep the deny.
 
 ## [2.4.0]
 

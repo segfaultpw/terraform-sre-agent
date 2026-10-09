@@ -146,11 +146,26 @@ variable "enable_waf_read" {
     logging configuration, the requests the WAF sampled for a rule and the
     addresses a rate-based rule is limiting right now.
 
-    Optional. Without it traffic detection still works from DNS, metrics and
+    Opt-in (default false). Turn it on for WAF-based client rates in traffic
+    protection. Without it traffic detection still works from DNS, metrics and
     logs; what is lost is the WAF's own per-client data, and the product's
     traffic page says that it was not read. Read-only.
   EOT
-  default     = true
+  default     = false
+}
+
+variable "enable_apigateway_read" {
+  type        = bool
+  description = <<-EOT
+    API Gateway reads (`apigateway:GET`) so traffic protection can see which
+    APIs stand in front of a service. IAM names every API Gateway read GET, which
+    includes stage variables (some teams keep secrets there), so this is off by
+    default. An explicit deny of API key values is added whenever it is on.
+
+    Optional. Without it detection still works from DNS, metrics and logs, and the
+    product says that API Gateway was not read. Read-only.
+  EOT
+  default     = false
 }
 
 variable "enable_observability" {

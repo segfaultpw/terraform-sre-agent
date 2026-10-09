@@ -161,7 +161,6 @@ locals {
         "route53resolver:List*",
         "cloudfront:Get*",
         "cloudfront:List*",
-        "apigateway:GET",
         "directconnect:Describe*",
         "globalaccelerator:Describe*",
         "globalaccelerator:List*",
@@ -175,8 +174,17 @@ locals {
     # uses them to tell which edge stands in front of a service and who is
     # hammering it. OPTIONAL: without this group detection still works from DNS,
     # metrics and logs, and the product says which inputs it did not read. The
-    # CloudFront, load balancer and API Gateway reads it also uses are in the
-    # networking group.
+    # CloudFront and load balancer reads it also uses are in the networking group;
+    # API Gateway has its own opt-in group below.
+    # --- API Gateway (traffic protection, opt-in) ---------------------------
+    # IAM names every API Gateway read GET, and stage variables, where some teams
+    # keep secrets, are readable through it. So it is its own group, off by default,
+    # and its NoApiKeyValues deny below exists only where this allow does.
+    apigateway = {
+      enabled = var.enable_apigateway_read
+      actions = ["apigateway:GET"]
+    }
+
     waf = {
       enabled = var.enable_waf_read
       actions = [
@@ -360,9 +368,9 @@ data "aws_iam_policy_document" "readonly" {
   # too: with `apigateway:GET` on "*" the role could read key VALUES. Traffic protection
   # needs the shape of the APIs (stages, domains, logging), never a key, so the key
   # resources and the keys of a usage plan are denied. An explicit deny wins over the
-  # allow above, and it exists only where that allow does.
+  # allow above, and it exists only where that allow does (`enable_apigateway_read`).
   dynamic "statement" {
-    for_each = var.enable_networking ? [1] : []
+    for_each = var.enable_apigateway_read ? [1] : []
 
     content {
       sid     = "NoApiKeyValues"
