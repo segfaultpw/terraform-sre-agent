@@ -1,5 +1,5 @@
 terraform {
-  # 1.5 for `precondition` on terraform_data; nothing here needs anything newer.
+  # The same floor as the other modules, so one Terraform version runs them all.
   required_version = ">= 1.5"
 
   required_providers {
