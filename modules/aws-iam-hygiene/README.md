@@ -6,7 +6,8 @@ and to put the key back if you undo it.
 
 It is the only place SRE Agent writes to IAM, and the grant is as narrow as that write can
 be. It can read who holds a key and when it was last used, and change a key's status. It can
-never delete a key, create one, or touch a user, a policy or a login, and a runbook step can
+never delete a key, create one, or touch a user, a policy or a login (deleting a key it
+deactivated belongs to the separate [`aws-cleanup`](../aws-cleanup) role), and a runbook step can
 never name the connector.
 
 Separate from `aws-readonly` on purpose. No read of your account (the capacity, FinOps and
@@ -43,6 +44,7 @@ in another account.
 |---|---|
 | `iam:GetUser`, `iam:ListAccessKeys`, `iam:GetAccessKeyLastUsed` | Read the user's keys and when the key was last used, before anything is changed. The connector refuses a key the user does not hold. |
 | `iam:UpdateAccessKey` | Set the key `Inactive`, or back to `Active` for the undo. Behind `enable_key_changes`. |
+| Deny `iam:UpdateAccessKey` on `*` when the user carries the `sre-agent:protect` tag (any value) | A protected user's key is never touched, even if SRE Agent did not check. Exists only where `enable_key_changes` does. |
 | `iam:SimulatePrincipalPolicy` (own role ARN only) | The Verify button checks this role against what the app derived, without a write. Behind `enable_verification`. |
 
 This is the same derivation the app shows under Settings, Infrastructure, Show the policy
@@ -56,6 +58,7 @@ This is the same derivation the app shows under Settings, Infrastructure, Show t
 | `trusted_principal_arn` | `string` | | yes |
 | `enable_key_changes` | `bool` | `true` | no |
 | `enable_verification` | `bool` | `true` | no |
+| `protect_tag_key` | `string` | `"sre-agent:protect"` | no |
 | `aws_partition` | `string` | `"aws"` | no |
 | `role_name` / `policy_name` | `string` | `"sre-agent-iam-hygiene"` | no |
 | `max_session_duration` | `number` | `3600` | no |

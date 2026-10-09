@@ -31,6 +31,16 @@ variable "enable_key_changes" {
   default     = true
 }
 
+variable "protect_tag_key" {
+  type        = string
+  description = <<-EOT
+    The tag whose presence (any value) on a user makes AWS refuse iam:UpdateAccessKey for that
+    user's keys. SRE Agent checks the same tag itself. Leave the default unless you changed the
+    tag in the product.
+  EOT
+  default     = "sre-agent:protect"
+}
+
 variable "aws_partition" {
   type        = string
   description = "AWS partition (aws, aws-us-gov, aws-cn)."

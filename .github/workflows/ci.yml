@@ -32,6 +32,16 @@ jobs:
           done
           exit $failed
 
+      # A module with a `tests/` directory pins its policy against the one the product derives.
+      - name: Run module tests
+        run: |
+          set -euo pipefail
+          for dir in modules/*/; do
+            [ -d "${dir}tests" ] || continue
+            echo "==> $dir"
+            (cd "$dir" && terraform init -backend=false -input=false > /dev/null && terraform test)
+          done
+
   tflint:
     runs-on: ubuntu-latest
     steps:

@@ -34,6 +34,26 @@ data "aws_iam_policy_document" "hygiene" {
     resources = local.user_arns
   }
 
+  # The protect tag: AWS refuses to change the key of a user tagged `sre-agent:protect` (any
+  # value), even if SRE Agent did not. `Null: false` means "the tag key exists". It exists only
+  # where the Allow does.
+  dynamic "statement" {
+    for_each = var.enable_key_changes ? [1] : []
+
+    content {
+      sid       = "RefuseProtectedUsers"
+      effect    = "Deny"
+      actions   = ["iam:UpdateAccessKey"]
+      resources = ["*"]
+
+      condition {
+        test     = "Null"
+        variable = "aws:ResourceTag/${var.protect_tag_key}"
+        values   = ["false"]
+      }
+    }
+  }
+
   # The one statement here that names this role itself: it can simulate only
   # the role it rides on, so the product's Verify button can check this role
   # against what the app derived without a single write. Refuse it and only

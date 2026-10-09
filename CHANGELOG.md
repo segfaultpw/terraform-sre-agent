@@ -8,6 +8,25 @@ than a `terraform apply`.
 - **minor**: a permission added, because the product gained a feature needing it
 - **patch**: documentation, validation, formatting; no change to what is granted
 
+## [3.1.0]
+
+### Added
+- `aws-cleanup`: a new module, the role behind SRE Agent's AWS cleanup connector
+  (`aws_cleanup`), which Self-healing's deletions go through. Five switches, all on by
+  default, each granting only what that group of deletions needs: `enable_iam_deletions`
+  (`iam:DeleteAccessKey`, `iam:DeleteLoginProfile` on the account's users, with the reads that
+  prove them unused), `enable_ebs_deletions` (snapshot, delete and recreate an unattached
+  volume), `enable_address_release` (`ec2:ReleaseAddress`), `enable_snapshot_image_deletions`
+  (`ec2:DeleteSnapshot`, `ec2:DeregisterImage`, the Recycle Bin restores and the reads of your
+  Recycle Bin rules) and `enable_log_retention` (`logs:PutRetentionPolicy`,
+  `logs:DeleteRetentionPolicy`). Writes are scoped to a resource type in the account and
+  `aws_region`, never to one id. A Deny at the end refuses every destructive write the role is
+  granted on a resource tagged `sre-agent:protect` (any value). Nothing existing changes: the
+  module only adds a role when you apply it, and deleting the role stops every deletion.
+- `aws-iam-hygiene`: a Deny of `iam:UpdateAccessKey` for a user tagged `sre-agent:protect` (any
+  value), behind `enable_key_changes` like the Allow, with a `protect_tag_key` input. It only
+  matters once you tag a user; nothing is denied until you do.
+
 ## [3.0.0]
 
 ### Added
