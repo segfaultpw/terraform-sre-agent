@@ -8,6 +8,27 @@ than a `terraform apply`.
 - **minor**: a permission added, because the product gained a feature needing it
 - **patch**: documentation, validation, formatting; no change to what is granted
 
+## [2.5.0]
+
+### Added
+- `aws-readonly`: a `waf` group behind `enable_waf_read` (default `true`):
+  `wafv2:ListWebACLs`, `wafv2:GetWebACL`, `wafv2:ListResourcesForWebACL`,
+  `wafv2:GetLoggingConfiguration`, `wafv2:GetSampledRequests` and
+  `wafv2:GetRateBasedStatementManagedKeys`. Traffic protection reads them to tell
+  which edge stands in front of a service (a web ACL, what it protects, where it
+  logs) and to see who is hammering it (the requests the WAF sampled for a rule and
+  the addresses a rate rule is limiting right now). The group is optional: set
+  `enable_waf_read = false` and detection still works from DNS, metrics and logs,
+  and the product says which inputs it did not read. Every action is a read.
+
+### Changed
+- `aws-readonly`: with `enable_networking` the policy now carries an explicit
+  `NoApiKeyValues` deny of `apigateway:GET` on the API key resources
+  (`/apikeys`, `/apikeys/*`, and the keys of a usage plan). IAM names every API
+  Gateway read `GET`, which includes API key values; the product only needs the
+  shape of the APIs. This removes a read, so a policy copied by hand from before
+  this version should add the same deny.
+
 ## [2.4.0]
 
 ### Added

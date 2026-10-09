@@ -168,6 +168,27 @@ locals {
       ]
     }
 
+    # --- WAF (traffic protection) ------------------------------------------
+    # What the web ACLs in front of a service are, what they protect, where they
+    # log, and the WAF's own per-client data: the requests it sampled for a rule
+    # and the addresses a rate rule is limiting right now. Traffic protection
+    # uses them to tell which edge stands in front of a service and who is
+    # hammering it. OPTIONAL: without this group detection still works from DNS,
+    # metrics and logs, and the product says which inputs it did not read. The
+    # CloudFront, load balancer and API Gateway reads it also uses are in the
+    # networking group.
+    waf = {
+      enabled = var.enable_waf_read
+      actions = [
+        "wafv2:ListWebACLs",
+        "wafv2:GetWebACL",
+        "wafv2:ListResourcesForWebACL",
+        "wafv2:GetLoggingConfiguration",
+        "wafv2:GetSampledRequests",
+        "wafv2:GetRateBasedStatementManagedKeys",
+      ]
+    }
+
     # --- Observability -----------------------------------------------------
     # Metrics, logs, traces, and the change history an investigation correlates
     # against. logs:StopQuery is write-shaped but only cancels a query this role
@@ -332,6 +353,28 @@ data "aws_iam_policy_document" "readonly" {
       effect    = "Allow"
       actions   = group.value.actions
       resources = ["*"]
+    }
+  }
+
+  # IAM names every API Gateway read GET, and the API keys are API Gateway resources
+  # too: with `apigateway:GET` on "*" the role could read key VALUES. Traffic protection
+  # needs the shape of the APIs (stages, domains, logging), never a key, so the key
+  # resources and the keys of a usage plan are denied. An explicit deny wins over the
+  # allow above, and it exists only where that allow does.
+  dynamic "statement" {
+    for_each = var.enable_networking ? [1] : []
+
+    content {
+      sid     = "NoApiKeyValues"
+      effect  = "Deny"
+      actions = ["apigateway:GET"]
+
+      resources = [
+        "arn:aws:apigateway:*::/apikeys",
+        "arn:aws:apigateway:*::/apikeys/*",
+        "arn:aws:apigateway:*::/usageplans/*/keys",
+        "arn:aws:apigateway:*::/usageplans/*/keys/*",
+      ]
     }
   }
 

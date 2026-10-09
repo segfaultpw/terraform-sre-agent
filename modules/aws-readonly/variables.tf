@@ -139,6 +139,20 @@ variable "enable_networking" {
   default     = true
 }
 
+variable "enable_waf_read" {
+  type        = bool
+  description = <<-EOT
+    AWS WAFv2 reads for traffic protection: web ACLs, what they protect, their
+    logging configuration, the requests the WAF sampled for a rule and the
+    addresses a rate-based rule is limiting right now.
+
+    Optional. Without it traffic detection still works from DNS, metrics and
+    logs; what is lost is the WAF's own per-client data, and the product's
+    traffic page says that it was not read. Read-only.
+  EOT
+  default     = true
+}
+
 variable "enable_observability" {
   type        = bool
   description = <<-EOT
