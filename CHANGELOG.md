@@ -15,8 +15,15 @@ than a `terraform apply`.
   (`aws_cleanup`), which Self-healing's deletions go through. Five switches, all on by
   default, each granting only what that group of deletions needs: `enable_iam_deletions`
   (`iam:DeleteAccessKey`, `iam:DeleteLoginProfile` on the account's users, with the reads that
-  prove them unused), `enable_ebs_deletions` (snapshot, delete and recreate an unattached
-  volume), `enable_address_release` (`ec2:ReleaseAddress`), `enable_snapshot_image_deletions`
+  prove them unused, and the reads of the customer-managed policies attached to a user or its
+  groups, `iam:GetPolicy` and `iam:GetPolicyVersion`, that prove the user is not an
+  administrator), `enable_ebs_deletions` (snapshot, delete and recreate an unattached volume; to
+  recreate one encrypted with a customer-managed key it also allows `kms:Decrypt`,
+  `kms:DescribeKey`, `kms:GenerateDataKeyWithoutPlaintext`, `kms:ReEncryptFrom`,
+  `kms:ReEncryptTo` and `kms:CreateGrant` on the account's keys in `aws_region`, only when EC2
+  makes the call (`kms:ViaService`) and, for a grant, only for an AWS resource
+  (`kms:GrantIsForAWSResource`); a volume encrypted with a key in another account is restored by
+  hand), `enable_address_release` (`ec2:ReleaseAddress`), `enable_snapshot_image_deletions`
   (`ec2:DeleteSnapshot`, `ec2:DeregisterImage`, the Recycle Bin restores and the reads of your
   Recycle Bin rules) and `enable_log_retention` (`logs:PutRetentionPolicy`,
   `logs:DeleteRetentionPolicy`). Writes are scoped to a resource type in the account and
