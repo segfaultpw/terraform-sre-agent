@@ -139,6 +139,28 @@ variable "enable_networking" {
   default     = true
 }
 
+variable "enable_waf_read" {
+  type        = bool
+  description = <<-EOT
+    Deprecated: has no effect since 4.0 and will be removed in 5.0. SRE Agent no
+    longer reads WAF or API Gateway. Kept so a module call that still sets it
+    keeps planning; delete the argument at your leisure. Setting it to true
+    raises a warning and grants nothing.
+  EOT
+  default     = false
+}
+
+variable "enable_apigateway_read" {
+  type        = bool
+  description = <<-EOT
+    Deprecated: has no effect since 4.0 and will be removed in 5.0. SRE Agent no
+    longer reads WAF or API Gateway. Kept so a module call that still sets it
+    keeps planning; delete the argument at your leisure. Setting it to true
+    raises a warning and grants nothing.
+  EOT
+  default     = false
+}
+
 variable "enable_observability" {
   type        = bool
   description = <<-EOT

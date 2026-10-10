@@ -10,23 +10,33 @@ than a `terraform apply`.
 
 ## [4.0.0]
 
-### Removed (major: variables and permissions were removed)
-- `aws-readonly`: the `enable_waf_read` and `enable_apigateway_read` variables, the `waf`
-  and `apigateway` groups they switched (`wafv2:ListWebACLs`, `wafv2:GetWebACL`,
+### Removed (major: permissions were removed)
+- `aws-readonly`: the `waf` and `apigateway` groups that `enable_waf_read` and
+  `enable_apigateway_read` switched (`wafv2:ListWebACLs`, `wafv2:GetWebACL`,
   `wafv2:ListResourcesForWebACL`, `wafv2:GetLoggingConfiguration`,
   `wafv2:GetSampledRequests`, `wafv2:GetRateBasedStatementManagedKeys` and
   `apigateway:GET`) and the `NoApiKeyValues` deny that came with the API Gateway allow.
   SRE Agent removed the traffic protection preview that read them, and nothing in the
   product reads WAF or API Gateway any more. Nothing is granted that was not before.
-- `aws-readonly`: the stale mention of API Gateway in the `enable_networking` description.
-  `apigateway:GET` left that group in 3.0.0.
+- `aws-readonly`: the stale mentions of API Gateway in the `enable_networking` description
+  and in the networking group's comment. `apigateway:GET` left that group in 3.0.0.
+
+### Deprecated
+- `aws-readonly`: `enable_waf_read` and `enable_apigateway_read` stay as no-op variables
+  (default `false`) so an existing module call keeps planning. They grant nothing; setting
+  one to `true` raises a warning from a `check` block. They will be removed in 5.0.
+
+### Added
+- `aws-readonly`: `tests/policy.tftest.hcl`, which pins that the rendered policy holds no
+  `wafv2:` or `apigateway:` action and no `NoApiKeyValues` deny, and that the two
+  deprecated variables change nothing.
 
 ### Upgrading from 3.x
-- Delete `enable_waf_read` and `enable_apigateway_read` from your module call, or `terraform
-  plan` fails with an unsupported argument. A role that already holds those actions loses
-  them on apply, which the product no longer needs. A policy copied by hand can drop the
-  `EdgeInventory`, `ApiGatewayRead`, `NoApiKeyValues` and `WafRead` statements; keeping them
-  is harmless.
+- Nothing to change in your module call: plans keep working. Delete `enable_waf_read` and
+  `enable_apigateway_read` from it at your leisure. A role that already holds the WAF and
+  API Gateway actions loses them on apply, which the product no longer needs. A policy
+  copied by hand can drop the `EdgeInventory`, `ApiGatewayRead`, `NoApiKeyValues` and
+  `WafRead` statements; keeping them is harmless.
 
 ## [3.1.0]
 

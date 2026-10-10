@@ -31,6 +31,7 @@ concluding there is nothing to report.
 | `enable_databases` | `true` | RDS, DynamoDB, ElastiCache, Redshift and MemoryDB metadata and configuration. No data-plane access exists in these actions. |
 | `enable_streaming` | `true` | Kinesis, Firehose, MSK, SQS, SNS and EventBridge shape and tags. Never a record or a message. |
 | `enable_networking` | `true` | Load balancers, CloudFront, Direct Connect, Global Accelerator, and ACM certificate expiry: where "the service is down" is usually first visible. |
+| `enable_waf_read`, `enable_apigateway_read` | `false` | Deprecated since 4.0, no effect, removed in 5.0. SRE Agent no longer reads WAF or API Gateway. They remain so an existing module call keeps planning; setting one to `true` raises a warning and grants nothing. |
 | `enable_observability` | `true` | CloudWatch metrics and alarms, Logs (including Insights), CloudTrail lookups, X-Ray, Health and Application Insights: SLIs, log search, "who changed what". |
 | `enable_cost` | `true` | Cost Explorer, CUR, budgets, Savings Plans, Compute Optimizer and the Price List: the FinOps pages price from your bill instead of a stored table. |
 | `enable_governance` | `true` | Config, Organizations, quotas, resource groups and tagging: resolves ownership across every service at once. |

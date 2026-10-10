@@ -143,8 +143,8 @@ locals {
     # ec2:Describe* in the compute group.
     #
     # ACM sits here because a certificate is TLS termination for the load
-    # balancers, CloudFront distributions and API Gateways in this same group,
-    # and an expiring one takes them all down together. Describe and List only:
+    # balancers and CloudFront distributions in this same group, and an
+    # expiring one takes them all down together. Describe and List only:
     # acm:GetCertificate and acm:ExportCertificate are deliberately absent,
     # because Export hands back the private key of an exportable certificate,
     # which is data rather than shape.
@@ -316,6 +316,22 @@ resource "terraform_data" "at_least_one_service" {
       condition     = length(local.enabled_statements) > 0
       error_message = "At least one service group must be enabled, otherwise this role grants nothing."
     }
+  }
+}
+
+# The two switches below were removed from the product's needs in 4.0 and stay only so an
+# existing module call keeps planning. A check warns without failing the plan.
+check "deprecated_enable_waf_read" {
+  assert {
+    condition     = !var.enable_waf_read
+    error_message = "enable_waf_read is deprecated and has no effect: SRE Agent no longer reads WAF, and nothing is granted for it. Remove the argument; it will be removed in 5.0."
+  }
+}
+
+check "deprecated_enable_apigateway_read" {
+  assert {
+    condition     = !var.enable_apigateway_read
+    error_message = "enable_apigateway_read is deprecated and has no effect: SRE Agent no longer reads API Gateway, and nothing is granted for it. Remove the argument; it will be removed in 5.0."
   }
 }
 
