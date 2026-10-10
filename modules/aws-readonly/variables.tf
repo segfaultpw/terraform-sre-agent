@@ -128,44 +128,15 @@ variable "enable_streaming" {
 variable "enable_networking" {
   type        = bool
   description = <<-EOT
-    Load balancers, Route 53, CloudFront, API Gateway, Direct Connect, Global
-    Accelerator and ACM: how traffic reaches a workload, and where "the service
-    is down" is usually first visible.
+    Load balancers, Route 53, CloudFront, Direct Connect, Global Accelerator and
+    ACM: how traffic reaches a workload, and where "the service is down" is
+    usually first visible.
 
     ACM certificates are listed and described so their expiry can be watched
     before it takes an endpoint down. The private key is never reachable:
     `acm:ExportCertificate` is absent.
   EOT
   default     = true
-}
-
-variable "enable_waf_read" {
-  type        = bool
-  description = <<-EOT
-    AWS WAFv2 reads for traffic protection: web ACLs, what they protect, their
-    logging configuration, the requests the WAF sampled for a rule and the
-    addresses a rate-based rule is limiting right now.
-
-    Opt-in (default false). Turn it on for WAF-based client rates in traffic
-    protection. Without it traffic detection still works from DNS, metrics and
-    logs; what is lost is the WAF's own per-client data, and the product's
-    traffic page says that it was not read. Read-only.
-  EOT
-  default     = false
-}
-
-variable "enable_apigateway_read" {
-  type        = bool
-  description = <<-EOT
-    API Gateway reads (`apigateway:GET`) so traffic protection can see which
-    APIs stand in front of a service. IAM names every API Gateway read GET, which
-    includes stage variables (some teams keep secrets there), so this is off by
-    default. An explicit deny of API key values is added whenever it is on.
-
-    Optional. Without it detection still works from DNS, metrics and logs, and the
-    product says that API Gateway was not read. Read-only.
-  EOT
-  default     = false
 }
 
 variable "enable_observability" {

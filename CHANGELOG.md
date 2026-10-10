@@ -8,6 +8,26 @@ than a `terraform apply`.
 - **minor**: a permission added, because the product gained a feature needing it
 - **patch**: documentation, validation, formatting; no change to what is granted
 
+## [4.0.0]
+
+### Removed (major: variables and permissions were removed)
+- `aws-readonly`: the `enable_waf_read` and `enable_apigateway_read` variables, the `waf`
+  and `apigateway` groups they switched (`wafv2:ListWebACLs`, `wafv2:GetWebACL`,
+  `wafv2:ListResourcesForWebACL`, `wafv2:GetLoggingConfiguration`,
+  `wafv2:GetSampledRequests`, `wafv2:GetRateBasedStatementManagedKeys` and
+  `apigateway:GET`) and the `NoApiKeyValues` deny that came with the API Gateway allow.
+  SRE Agent removed the traffic protection preview that read them, and nothing in the
+  product reads WAF or API Gateway any more. Nothing is granted that was not before.
+- `aws-readonly`: the stale mention of API Gateway in the `enable_networking` description.
+  `apigateway:GET` left that group in 3.0.0.
+
+### Upgrading from 3.x
+- Delete `enable_waf_read` and `enable_apigateway_read` from your module call, or `terraform
+  plan` fails with an unsupported argument. A role that already holds those actions loses
+  them on apply, which the product no longer needs. A policy copied by hand can drop the
+  `EdgeInventory`, `ApiGatewayRead`, `NoApiKeyValues` and `WafRead` statements; keeping them
+  is harmless.
+
 ## [3.1.0]
 
 ### Added
