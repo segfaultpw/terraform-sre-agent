@@ -46,8 +46,8 @@ calls AWS; the Deny is the second lock, in your account. Allow statements carry 
 with two exceptions: `ec2:CreateTags` is allowed only while a snapshot or a volume is created
 (`ec2:CreateAction` is `CreateSnapshot` or `CreateVolume`), so the role cannot add a tag to an
 existing volume or snapshot, which would be a way around tag-based access control, and the KMS
-actions that restoring an encrypted volume needs are allowed only when EC2 makes the call. A key in
-another account must also allow this role in its own key policy. The Verify
+actions that restoring an encrypted volume needs are allowed only when EC2 makes the call. A volume
+encrypted with a key in another account is restored by hand by someone with access to that key. The Verify
 button passes that context when it simulates, and never simulates a Deny.
 
 **Tag your break-glass IAM users with `sre-agent:protect`.** The Deny covers `iam:DeleteAccessKey`

@@ -212,7 +212,7 @@ data "aws_iam_policy_document" "cleanup" {
 
   # Recreating a volume encrypted with a customer-managed key. Allowed only when EC2 calls KMS
   # for the role, and a grant only for an AWS service resource (the volume), never for a person
-  # or a role. A key in another account must also allow this role in its own key policy.
+  # or a role. A volume encrypted with a key in another account is restored by hand by someone with access to that key.
   dynamic "statement" {
     for_each = var.enable_ebs_deletions ? [1] : []
 
