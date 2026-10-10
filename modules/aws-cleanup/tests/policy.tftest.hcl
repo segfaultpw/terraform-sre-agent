@@ -66,6 +66,8 @@ run "grants_what_the_product_derives" {
       "Allow|iam:GetAccessKeyLastUsed|arn:aws:iam::123456789012:user/*|",
       "Allow|iam:GetGroupPolicy|arn:aws:iam::123456789012:group/*|",
       "Allow|iam:GetLoginProfile|arn:aws:iam::123456789012:user/*|",
+      "Allow|iam:GetPolicy|arn:aws:iam::123456789012:policy/*|",
+      "Allow|iam:GetPolicyVersion|arn:aws:iam::123456789012:policy/*|",
       "Allow|iam:GetUser|arn:aws:iam::123456789012:user/*|",
       "Allow|iam:GetUserPolicy|arn:aws:iam::123456789012:user/*|",
       "Allow|iam:ListAccessKeys|arn:aws:iam::123456789012:user/*|",
@@ -75,6 +77,12 @@ run "grants_what_the_product_derives" {
       "Allow|iam:ListGroupsForUser|arn:aws:iam::123456789012:user/*|",
       "Allow|iam:ListMFADevices|arn:aws:iam::123456789012:user/*|",
       "Allow|iam:ListUserPolicies|arn:aws:iam::123456789012:user/*|",
+      "Allow|kms:CreateGrant|arn:aws:kms:us-east-1:123456789012:key/*|{\"Bool\":{\"kms:GrantIsForAWSResource\":\"true\"},\"StringEquals\":{\"kms:ViaService\":\"ec2.us-east-1.amazonaws.com\"}}",
+      "Allow|kms:Decrypt|arn:aws:kms:us-east-1:123456789012:key/*|{\"StringEquals\":{\"kms:ViaService\":\"ec2.us-east-1.amazonaws.com\"}}",
+      "Allow|kms:DescribeKey|arn:aws:kms:us-east-1:123456789012:key/*|{\"StringEquals\":{\"kms:ViaService\":\"ec2.us-east-1.amazonaws.com\"}}",
+      "Allow|kms:GenerateDataKeyWithoutPlaintext|arn:aws:kms:us-east-1:123456789012:key/*|{\"StringEquals\":{\"kms:ViaService\":\"ec2.us-east-1.amazonaws.com\"}}",
+      "Allow|kms:ReEncryptFrom|arn:aws:kms:us-east-1:123456789012:key/*|{\"StringEquals\":{\"kms:ViaService\":\"ec2.us-east-1.amazonaws.com\"}}",
+      "Allow|kms:ReEncryptTo|arn:aws:kms:us-east-1:123456789012:key/*|{\"StringEquals\":{\"kms:ViaService\":\"ec2.us-east-1.amazonaws.com\"}}",
       "Allow|logs:DeleteRetentionPolicy|arn:aws:logs:us-east-1:123456789012:log-group:*:*|",
       "Allow|logs:DescribeLogGroups|*|",
       "Allow|logs:ListTagsForResource|arn:aws:logs:us-east-1:123456789012:log-group:*:*|",
@@ -108,6 +116,52 @@ run "one_group_off_removes_its_grants_and_its_deny" {
   assert {
     condition     = !contains(local.any_reads, "ec2:DescribeAddresses")
     error_message = "the address reads must go with the address release"
+  }
+}
+
+run "the_kms_grants_go_with_the_volume_restore_and_only_through_ec2" {
+  command = plan
+
+  assert {
+    condition = alltrue([
+      for s in jsondecode(data.aws_iam_policy_document.cleanup.json).Statement :
+      s.Effect == "Allow" && length([for a in flatten([s.Action]) : a if startswith(a, "kms:")]) > 0
+      ? lookup(lookup(s.Condition, "StringEquals", {}), "kms:ViaService", "") == "ec2.us-east-1.amazonaws.com"
+      : true
+    ])
+    error_message = "every KMS grant must be limited to calls EC2 makes"
+  }
+}
+
+run "ebs_off_removes_the_kms_grants" {
+  command = plan
+
+  variables {
+    enable_ebs_deletions = false
+  }
+
+  assert {
+    condition = length([
+      for s in jsondecode(data.aws_iam_policy_document.cleanup.json).Statement :
+      s if length([for a in flatten([s.Action]) : a if startswith(a, "kms:")]) > 0
+    ]) == 0
+    error_message = "the KMS grants exist only to restore a volume"
+  }
+}
+
+run "iam_off_removes_the_policy_reads" {
+  command = plan
+
+  variables {
+    enable_iam_deletions = false
+  }
+
+  assert {
+    condition = length([
+      for s in jsondecode(data.aws_iam_policy_document.cleanup.json).Statement :
+      s if length([for a in flatten([s.Action]) : a if startswith(a, "iam:GetPolicy")]) > 0
+    ]) == 0
+    error_message = "the customer-managed policy reads belong to the console password check"
   }
 }
 

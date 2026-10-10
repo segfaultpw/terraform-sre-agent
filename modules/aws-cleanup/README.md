@@ -43,9 +43,11 @@ pinned connector is held as `region_mismatch`.
 The policy ends with a Deny of every destructive write the role is granted, on any resource
 tagged `sre-agent:protect` (any value). SRE Agent checks the same tag itself and refuses before it
 calls AWS; the Deny is the second lock, in your account. Allow statements carry no condition,
-with one exception: `ec2:CreateTags` is allowed only while a snapshot or a volume is created
+with two exceptions: `ec2:CreateTags` is allowed only while a snapshot or a volume is created
 (`ec2:CreateAction` is `CreateSnapshot` or `CreateVolume`), so the role cannot add a tag to an
-existing volume or snapshot, which would be a way around tag-based access control. The Verify
+existing volume or snapshot, which would be a way around tag-based access control, and the KMS
+actions that restoring an encrypted volume needs are allowed only when EC2 makes the call. A key in
+another account must also allow this role in its own key policy. The Verify
 button passes that context when it simulates, and never simulates a Deny.
 
 **Tag your break-glass IAM users with `sre-agent:protect`.** The Deny covers `iam:DeleteAccessKey`
@@ -65,8 +67,8 @@ Settings, Infrastructure, Show the policy ("Cleanup role (deletions)").
 
 | Switch | Writes | Reads that prove it unused |
 |---|---|---|
-| `enable_iam_deletions` | `iam:DeleteAccessKey`, `iam:DeleteLoginProfile` on `user/*` | `iam:GetUser`, `iam:ListAccessKeys`, `iam:GetAccessKeyLastUsed`, `iam:GetLoginProfile`, `iam:ListMFADevices`, `iam:ListGroupsForUser`, the user and group policy listings |
-| `enable_ebs_deletions` | `ec2:CreateSnapshot`, `ec2:CreateVolume`, `ec2:DeleteVolume`, and `ec2:CreateTags` only while a snapshot or volume is created on volumes and snapshots of the Region | `ec2:DescribeVolumes`, `ec2:DescribeSnapshots`, `cloudtrail:LookupEvents` |
+| `enable_iam_deletions` | `iam:DeleteAccessKey`, `iam:DeleteLoginProfile` on `user/*` | `iam:GetUser`, `iam:ListAccessKeys`, `iam:GetAccessKeyLastUsed`, `iam:GetLoginProfile`, `iam:ListMFADevices`, `iam:ListGroupsForUser`, the user and group policy listings, `iam:GetPolicy` and `iam:GetPolicyVersion` on `policy/*` (the customer-managed policies attached to the user or its groups, to tell whether the user can administer the account) |
+| `enable_ebs_deletions` | `ec2:CreateSnapshot`, `ec2:CreateVolume`, `ec2:DeleteVolume`, and `ec2:CreateTags` only while a snapshot or volume is created on volumes and snapshots of the Region, and for a volume encrypted with a customer-managed key `kms:CreateGrant`, `kms:Decrypt`, `kms:DescribeKey`, `kms:GenerateDataKeyWithoutPlaintext`, `kms:ReEncryptFrom`, `kms:ReEncryptTo` on the keys of the account and Region, only when EC2 makes the call (`kms:ViaService`), and the grant only for an AWS service resource | `ec2:DescribeVolumes`, `ec2:DescribeSnapshots`, `cloudtrail:LookupEvents` |
 | `enable_address_release` | `ec2:ReleaseAddress` on `elastic-ip/*` | `ec2:DescribeAddresses`, `ec2:DescribeAddressesAttribute` |
 | `enable_snapshot_image_deletions` | `ec2:DeleteSnapshot`, `ec2:DeregisterImage`, `ec2:RestoreSnapshotFromRecycleBin`, `ec2:RestoreImageFromRecycleBin` | `ec2:DescribeSnapshots`, `ec2:DescribeSnapshotAttribute`, `ec2:DescribeImages`, `ec2:DescribeImageAttribute`, `ec2:DescribeInstances`, `ec2:DescribeLaunchTemplates`, `ec2:DescribeLaunchTemplateVersions`, `autoscaling:DescribeLaunchConfigurations`, `ec2:List*InRecycleBin`, `rbin:ListRules`, `rbin:GetRule` |
 | `enable_log_retention` | `logs:PutRetentionPolicy`, `logs:DeleteRetentionPolicy` on the Region's log groups | `logs:DescribeLogGroups`, `logs:ListTagsForResource`, `cloudtrail:DescribeTrails` |

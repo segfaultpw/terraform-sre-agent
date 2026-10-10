@@ -7,8 +7,10 @@
  * (while a Recycle Bin rule keeps them), and the retention you choose on a log group that
  * never expires. Deleting this role is the AWS-side kill switch for every one of them.
  *
- * Allow statements carry no Condition, with one exception: `ec2:CreateTags` is allowed
- * only while a snapshot or volume is created, so the role cannot tag existing resources.
+ * Allow statements carry no Condition, with two exceptions: `ec2:CreateTags` is allowed
+ * only while a snapshot or volume is created, so the role cannot tag existing resources, and
+ * the KMS actions that restoring a volume encrypted with a customer-managed key needs are
+ * allowed only when EC2 makes the call (`kms:ViaService`).
  * The product's Verify button passes that context when it simulates. The other Condition
  * is on the Deny at the end: every destructive write is refused on a resource
  * tagged `sre-agent:protect` (any value), whatever SRE Agent decides.
@@ -22,6 +24,11 @@ locals {
 
   user_arns  = ["${local.arn}:iam::${local.account}:user/*"]
   group_arns = ["${local.arn}:iam::${local.account}:group/*"]
+
+  # Customer-managed policies only: the check that a user is not an administrator reads the
+  # default version of each one attached to the user or its groups. AWS-managed ones are not read.
+  policy_arns = ["${local.arn}:iam::${local.account}:policy/*"]
+  key_arns    = ["${local.arn}:kms:${var.aws_region}:${local.account}:key/*"]
 
   volume_arn   = "${local.arn}:ec2:${var.aws_region}:${local.account}:volume/*"
   snapshot_arn = "${local.arn}:ec2:${var.aws_region}::snapshot/*"
@@ -79,6 +86,21 @@ locals {
     "iam:ListUserPolicies",
   ])
 
+  iam_policy_actions = sort([
+    "iam:GetPolicy",
+    "iam:GetPolicyVersion",
+  ])
+
+  # What EC2 does with a customer-managed key on the caller's behalf when a volume restored
+  # from an encrypted snapshot is created.
+  kms_actions = sort([
+    "kms:Decrypt",
+    "kms:DescribeKey",
+    "kms:GenerateDataKeyWithoutPlaintext",
+    "kms:ReEncryptFrom",
+    "kms:ReEncryptTo",
+  ])
+
   iam_group_actions = sort([
     "iam:GetGroupPolicy",
     "iam:ListAttachedGroupPolicies",
@@ -132,6 +154,17 @@ data "aws_iam_policy_document" "cleanup" {
     }
   }
 
+  dynamic "statement" {
+    for_each = var.enable_iam_deletions ? [1] : []
+
+    content {
+      sid       = "IamManagedPolicyReads"
+      effect    = "Allow"
+      actions   = local.iam_policy_actions
+      resources = local.policy_arns
+    }
+  }
+
   # FinOps: an unattached volume is snapshotted, then deleted, and can be recreated from
   # the snapshot.
   dynamic "statement" {
@@ -173,6 +206,49 @@ data "aws_iam_policy_document" "cleanup" {
         test     = "StringEquals"
         variable = "ec2:CreateAction"
         values   = ["CreateSnapshot", "CreateVolume"]
+      }
+    }
+  }
+
+  # Recreating a volume encrypted with a customer-managed key. Allowed only when EC2 calls KMS
+  # for the role, and a grant only for an AWS service resource (the volume), never for a person
+  # or a role. A key in another account must also allow this role in its own key policy.
+  dynamic "statement" {
+    for_each = var.enable_ebs_deletions ? [1] : []
+
+    content {
+      sid       = "VolumeRestoreKeyUse"
+      effect    = "Allow"
+      actions   = local.kms_actions
+      resources = local.key_arns
+
+      condition {
+        test     = "StringEquals"
+        variable = "kms:ViaService"
+        values   = ["ec2.${var.aws_region}.amazonaws.com"]
+      }
+    }
+  }
+
+  dynamic "statement" {
+    for_each = var.enable_ebs_deletions ? [1] : []
+
+    content {
+      sid       = "VolumeRestoreKeyGrant"
+      effect    = "Allow"
+      actions   = ["kms:CreateGrant"]
+      resources = local.key_arns
+
+      condition {
+        test     = "StringEquals"
+        variable = "kms:ViaService"
+        values   = ["ec2.${var.aws_region}.amazonaws.com"]
+      }
+
+      condition {
+        test     = "Bool"
+        variable = "kms:GrantIsForAWSResource"
+        values   = ["true"]
       }
     }
   }
