@@ -16,7 +16,15 @@ and the patch, runs, and reports to a signed URL; this function sees none of tha
 
 The contract is verifier/contract.md and SreWeb.API.VerifierQueueController in the
 sre-agent repository. A copy of this file ships in the `verifier` module of
-terraform-sre-agent; keep the two identical.
+terraform-sre-agent (modules/verifier/lambda/poller.py); the two are byte-identical and
+each repository pins the sha256 of its copy (verifier/poller/poller.py.sha256 here,
+modules/verifier/lambda/poller.py.sha256 there, same digest). Changing this file means
+changing both copies and both pins together.
+
+Failures are loud on purpose: an answer the poller cannot act on, a key the platform keeps
+refusing and an unreachable platform all raise, so the Lambda `Errors` metric trips and
+an alarm on it reaches somebody. The quiet answers are the platform's own documented
+"come back later" ones (see BACK_OFF and the 426 refusals).
 
 Standard library only, plus boto3 which the Lambda runtime provides.
 """
@@ -33,6 +41,20 @@ POLLER_VERSION = 1
 BACK_OFF = {"feature_not_available", "hosted_mode"}
 
 _api_key = None
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Never follows a redirect: urllib would copy the bearer token to the new location."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+_OPENER = urllib.request.build_opener(_NoRedirect)
+
+
+def open_without_redirects(request, timeout=20):
+    return _OPENER.open(request, timeout=timeout)
 
 
 def digest_of(image):
@@ -54,10 +76,11 @@ def queue_url(base_url, images):
     return "%s/api/verifier/queue?%s" % (base_url.rstrip("/"), urllib.parse.urlencode(query))
 
 
-def poll(base_url, api_key, images, opener=urllib.request.urlopen, timeout=20):
+def poll(base_url, api_key, images, opener=open_without_redirects, timeout=20):
     """One poll. Returns (status, body) where body is the decoded JSON answer.
 
-    A refusal is data, not an exception: the caller logs its code and message.
+    A refusal is data, not an exception: the caller logs its code and message. A 200 whose
+    body is not JSON is an error (RuntimeError), and so is a redirect, which is never followed.
     """
     request = urllib.request.Request(
         queue_url(base_url, images),
@@ -65,7 +88,12 @@ def poll(base_url, api_key, images, opener=urllib.request.urlopen, timeout=20):
     )
     try:
         with opener(request, timeout=timeout) as response:
-            return response.status, json.loads(response.read() or b"{}")
+            try:
+                return response.status, json.loads(response.read() or b"{}")
+            except ValueError:
+                raise RuntimeError(
+                    "the platform answered %s with a body that is not JSON" % response.status
+                )
     except urllib.error.HTTPError as error:
         try:
             body = json.loads(error.read() or b"{}")
@@ -137,14 +165,20 @@ def load_config(env=os.environ):
     }
 
 
-def api_key(config, secrets):
+def api_key(config, secrets, refresh=False):
+    """The API key, read once per container; `refresh` reads the secret again."""
     global _api_key
-    if _api_key is None:
+    if refresh or _api_key is None:
         _api_key = secrets.get_secret_value(SecretId=config["secret_arn"])["SecretString"].strip()
     return _api_key
 
 
-def handler(event=None, context=None, ecs=None, secrets=None, opener=urllib.request.urlopen):
+def key_refused(status, body):
+    """Whether the platform refused the key itself (not one of its own back-off answers)."""
+    return status in (401, 403) and body.get("error", "unknown") not in BACK_OFF
+
+
+def handler(event=None, context=None, ecs=None, secrets=None, opener=open_without_redirects):
     config = load_config()
     if ecs is None or secrets is None:
         import boto3
@@ -153,6 +187,14 @@ def handler(event=None, context=None, ecs=None, secrets=None, opener=urllib.requ
         secrets = secrets or boto3.client("secretsmanager")
 
     status, body = poll(config["base_url"], api_key(config, secrets), config["images"], opener=opener)
+
+    # A key rotated in Secrets Manager is picked up here: the cached copy is dropped, the
+    # secret is read again and the poll is retried once.
+    if key_refused(status, body):
+        log("warn", "the API key was refused (%s); reading the secret again" % body.get("error", "unknown"))
+        status, body = poll(
+            config["base_url"], api_key(config, secrets, refresh=True), config["images"], opener=opener
+        )
 
     if status == 200:
         started = [start_job(job, config, ecs) for job in body.get("data", [])]
@@ -165,8 +207,13 @@ def handler(event=None, context=None, ecs=None, secrets=None, opener=urllib.requ
 
     if status == 426:
         log("error", "the platform will not hand work to this poller (%s): %s" % (code, message))
-    elif status in (401, 403) and code not in BACK_OFF:
-        log("error", "the API key was refused (%s): check that it carries the verifier:poll scope" % code)
+    elif key_refused(status, body):
+        refused = (
+            "the API key was refused (%s) after reading the secret again: check that the secret "
+            "holds a live key and that the key carries the verifier:poll scope" % code
+        )
+        log("error", refused)
+        raise RuntimeError(refused)
     elif code in BACK_OFF:
         log("warn", "nothing to do (%s): %s" % (code, message))
     else:

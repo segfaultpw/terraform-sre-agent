@@ -124,6 +124,23 @@ run "the_code_runs_with_a_role_that_has_no_permissions" {
     condition     = alltrue([for definition in values(aws_ecs_task_definition.verifier) : definition.task_role_arn == aws_iam_role.task.arn])
     error_message = "every task definition runs as the permissionless task role"
   }
+
+  # Nothing is attached to or embedded in the task role itself either, which the
+  # attachment and policy resources above cannot show.
+  assert {
+    condition     = length(aws_iam_role.task.managed_policy_arns) == 0
+    error_message = "the task role has no managed policies"
+  }
+
+  assert {
+    condition     = length(aws_iam_role.task.inline_policy) == 0
+    error_message = "the task role has no inline policies"
+  }
+
+  assert {
+    condition     = aws_iam_role.task.permissions_boundary == null
+    error_message = "the task role is not given a boundary that a later edit could widen"
+  }
 }
 
 run "the_poller_can_do_four_things_and_nothing_is_a_wildcard" {
@@ -234,11 +251,6 @@ run "the_poller_is_told_where_everything_is" {
   }
 
   assert {
-    condition     = aws_lambda_function.poller.reserved_concurrent_executions == 1
-    error_message = "one poll at a time"
-  }
-
-  assert {
     condition     = output.queue_url == "https://sre.example.com/api/verifier/queue"
     error_message = "the queue address the Integrations page shows"
   }
@@ -281,6 +293,133 @@ run "the_origin_is_https_with_no_path" {
   }
 
   expect_failures = [var.sre_agent_url]
+}
+
+# Overlapping polls are safe (the platform hands a job out with one conditional write, so the
+# second of two simultaneous polls is given nothing and starts nothing), and a reservation fails
+# to apply on an account whose total Lambda concurrency is still the new-account 10. So no
+# reservation unless it is asked for.
+run "the_poller_reserves_no_concurrency_by_default" {
+  command = apply
+
+  assert {
+    condition     = aws_lambda_function.poller.reserved_concurrent_executions == null || aws_lambda_function.poller.reserved_concurrent_executions == -1
+    error_message = "an unset reservation must not take concurrency from a small account"
+  }
+}
+
+run "a_reservation_is_wired_when_asked_for" {
+  command = apply
+
+  variables {
+    poller_reserved_concurrency = 1
+  }
+
+  assert {
+    condition     = aws_lambda_function.poller.reserved_concurrent_executions == 1
+    error_message = "poller_reserved_concurrency reaches the function"
+  }
+}
+
+run "a_reservation_of_zero_would_stop_every_poll_and_is_refused" {
+  command = plan
+
+  variables {
+    poller_reserved_concurrency = 0
+  }
+
+  expect_failures = [var.poller_reserved_concurrency]
+}
+
+run "a_failed_poll_is_not_retried_by_lambda" {
+  command = apply
+
+  assert {
+    condition     = aws_lambda_function_event_invoke_config.poller.maximum_retry_attempts == 0
+    error_message = "the next scheduled poll is the retry"
+  }
+
+  assert {
+    condition     = aws_lambda_function_event_invoke_config.poller.function_name == aws_lambda_function.poller.function_name
+    error_message = "the setting belongs to the poller"
+  }
+}
+
+run "no_alarm_is_built_without_somewhere_to_send_it" {
+  command = apply
+
+  assert {
+    condition     = length(aws_cloudwatch_metric_alarm.poller_errors) == 0
+    error_message = "alarm_actions defaults to none"
+  }
+}
+
+run "poller_errors_alarm_when_given_actions" {
+  command = apply
+
+  variables {
+    alarm_actions = ["arn:aws:sns:us-east-1:123456789012:oncall"]
+  }
+
+  assert {
+    condition     = length(aws_cloudwatch_metric_alarm.poller_errors) == 1
+    error_message = "one alarm"
+  }
+
+  assert {
+    condition     = aws_cloudwatch_metric_alarm.poller_errors[0].namespace == "AWS/Lambda" && aws_cloudwatch_metric_alarm.poller_errors[0].metric_name == "Errors"
+    error_message = "the alarm is on the poller's Errors metric, which a refused key, an unreachable platform and an unreadable answer all raise"
+  }
+
+  assert {
+    condition     = aws_cloudwatch_metric_alarm.poller_errors[0].alarm_actions == toset(["arn:aws:sns:us-east-1:123456789012:oncall"])
+    error_message = "the actions reach the alarm"
+  }
+
+  assert {
+    condition     = aws_cloudwatch_metric_alarm.poller_errors[0].dimensions.FunctionName == aws_lambda_function.poller.function_name
+    error_message = "the alarm watches this function"
+  }
+}
+
+run "more_than_three_zones_are_refused" {
+  command = plan
+
+  variables {
+    availability_zones = ["us-east-1a", "us-east-1b", "us-east-1c", "us-east-1d"]
+  }
+
+  expect_failures = [var.availability_zones]
+}
+
+run "an_empty_zone_list_is_refused" {
+  command = plan
+
+  variables {
+    availability_zones = []
+  }
+
+  expect_failures = [var.availability_zones]
+}
+
+run "an_egress_entry_that_is_not_a_cidr_is_refused" {
+  command = plan
+
+  variables {
+    egress_cidrs = ["0.0.0.0/0", "everywhere"]
+  }
+
+  expect_failures = [var.egress_cidrs]
+}
+
+run "no_egress_at_all_is_refused" {
+  command = plan
+
+  variables {
+    egress_cidrs = []
+  }
+
+  expect_failures = [var.egress_cidrs]
 }
 
 run "the_key_comes_from_a_secret_not_from_state" {

@@ -52,12 +52,26 @@ jobs:
       - name: The poller's tests
         run: python3 -I -W error::ResourceWarning -m unittest discover -s modules/verifier/lambda -v
 
+      # poller.py is a byte-identical copy of verifier/poller/poller.py in the sre-agent
+      # repository, and each repository pins the sha256 of its copy in poller.py.sha256 (the
+      # same digest in both). The repositories are different, so no job can compare the bytes:
+      # a change to either copy has to edit its own pin, which is the cue to change the other
+      # repository's copy and pin in the same piece of work.
+      - name: The poller matches its pinned digest
+        working-directory: modules/verifier/lambda
+        run: sha256sum -c poller.py.sha256
+
       - name: The task role has no permissions
         run: |
           set -euo pipefail
           # Nothing in the module may attach a policy to, or add one on, the task role.
           if grep -nE '(role|roles)[[:space:]]*=.*aws_iam_role\.task\.' modules/verifier/*.tf; then
             echo "::error::the verifier task role must have no policies"
+            exit 1
+          fi
+          # Nor may a role carry policies in its own block or as managed ARNs.
+          if grep -nE 'managed_policy_arns|inline_policy' modules/verifier/main.tf; then
+            echo "::error::no role in the verifier module may embed policies; the task role must have none"
             exit 1
           fi
           if grep -nE 'aws_iam_role_policy(_attachment)?"[[:space:]]+"[a-z_]+"' modules/verifier/main.tf | grep -v -E '"(execution|poller)"'; then

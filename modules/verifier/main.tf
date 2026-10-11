@@ -336,9 +336,11 @@ resource "aws_lambda_function" "poller" {
   timeout          = 30
   memory_size      = 128
 
-  # One invocation at a time: a poll is not safe to overlap with itself, and an organization
-  # verifies one change at a time.
-  reserved_concurrent_executions = 1
+  # No reservation unless asked for. Two polls that overlap are safe: SRE Agent hands a job out
+  # with one conditional write, so the second gets nothing and starts nothing (and the API key
+  # cache is per container). A reservation of 1 fails to apply on a new AWS account, whose total
+  # concurrency of 10 leaves no room to reserve.
+  reserved_concurrent_executions = var.poller_reserved_concurrency
 
   environment {
     variables = {
@@ -356,6 +358,39 @@ resource "aws_lambda_function" "poller" {
   tags = local.tags
 
   depends_on = [aws_cloudwatch_log_group.poller, aws_iam_role_policy.poller]
+}
+
+# EventBridge invokes the poller asynchronously, and Lambda retries a failed asynchronous
+# invocation twice by default. The next scheduled poll, a minute later, is the retry; two more
+# calls against a platform that is already failing would only add load.
+resource "aws_lambda_function_event_invoke_config" "poller" {
+  function_name          = aws_lambda_function.poller.function_name
+  maximum_retry_attempts = 0
+}
+
+# The poller raises when the API key is refused, the platform cannot be reached or its answer
+# cannot be read. Without an alarm those would only show in the log group.
+resource "aws_cloudwatch_metric_alarm" "poller_errors" {
+  count = length(var.alarm_actions) > 0 ? 1 : 0
+
+  alarm_name          = "${var.name_prefix}-poller-errors"
+  alarm_description   = "The verifier poller has failed for 15 minutes running: check its log group for the reason (a refused API key, an unreachable SRE Agent or an unreadable answer)."
+  namespace           = "AWS/Lambda"
+  metric_name         = "Errors"
+  statistic           = "Sum"
+  period              = 300
+  evaluation_periods  = 3
+  datapoints_to_alarm = 3
+  threshold           = 1
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = var.alarm_actions
+
+  dimensions = {
+    FunctionName = aws_lambda_function.poller.function_name
+  }
+
+  tags = local.tags
 }
 
 resource "aws_cloudwatch_event_rule" "poll" {

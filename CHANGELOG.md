@@ -10,6 +10,11 @@ than a `terraform apply`.
 
 ## [4.1.0]
 
+The `verifier` module was written ahead of the SRE Agent feature it serves and is tagged v4.1.0
+only when that feature is lit, which is when SRE Agent publishes its first verifier image
+digests. Before that SRE Agent answers every poller with `426` ("no image is published yet") and
+shows no Integrations card, so a module call cannot succeed.
+
 ### Added
 - `verifier`: a new module, the customer-run verifier. SRE Agent can build and test a proposed
   fix in a sandbox before it opens the pull request; this module runs that sandbox in your own
@@ -25,6 +30,12 @@ than a `terraform apply`.
   definitions in the one cluster, and `iam:PassRole` on the two task roles to ECS tasks only.
   The platform never connects to your account; the poller makes outbound HTTPS requests to your
   SRE Agent and calls ECS in your account.
+- `verifier`: `poller_reserved_concurrency` (default `null`, no reservation: overlapping polls are
+  safe, and a reservation fails to apply on an account whose Lambda concurrency is still the
+  new-account 10), `alarm_actions` (an optional alarm on the poller's `Errors`) and validation of
+  `availability_zones` (one to three) and `egress_cidrs` (CIDR blocks). A failed poll is not
+  retried by Lambda; the next scheduled poll is the retry. The poller re-reads a rotated API key
+  without a redeploy, raises when the key stays refused, and never follows a redirect.
 
 ## [4.0.0]
 

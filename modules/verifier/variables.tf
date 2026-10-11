@@ -82,8 +82,15 @@ variable "cpu_architecture" {
 
 variable "availability_zones" {
   type        = list(string)
-  description = "Availability zones for the private subnets the tasks run in. Defaults to the first two of the Region."
+  description = "Availability zones for the private subnets the tasks run in, one to three. Defaults to the first two of the Region."
   default     = null
+
+  # The VPC is split into four blocks (cidrsubnet with 2 new bits): one public subnet for the
+  # NAT gateway and up to three private ones.
+  validation {
+    condition     = var.availability_zones == null ? true : (length(var.availability_zones) >= 1 && length(var.availability_zones) <= 3)
+    error_message = "availability_zones must name one to three zones: the VPC holds one public subnet and at most three private ones."
+  }
 }
 
 variable "vpc_cidr" {
@@ -108,6 +115,11 @@ variable "egress_cidrs" {
     commands it runs.
   EOT
   default     = ["0.0.0.0/0"]
+
+  validation {
+    condition     = length(var.egress_cidrs) > 0 && alltrue([for cidr in var.egress_cidrs : can(cidrhost(cidr, 0))])
+    error_message = "egress_cidrs needs at least one entry, and every entry must be a CIDR block such as 0.0.0.0/0 or 10.9.0.0/28. A task with no egress cannot clone its repository."
+  }
 }
 
 variable "https_proxy" {
@@ -118,7 +130,7 @@ variable "https_proxy" {
 
 variable "no_proxy" {
   type        = string
-  description = "NO_PROXY for the tasks, when https_proxy is set."
+  description = "NO_PROXY for the tasks. Used only when https_proxy is set; ignored otherwise."
   default     = "localhost,127.0.0.1"
 }
 
@@ -143,6 +155,35 @@ variable "poll_schedule_expression" {
   type        = string
   description = "How often the poller asks for work. A job waits up to 15 minutes to be collected, and every poll is also what shows the poller as alive in Integrations."
   default     = "rate(1 minute)"
+}
+
+variable "poller_reserved_concurrency" {
+  type        = number
+  description = <<-EOT
+    Reserved concurrency for the poller Lambda. Null (the default) reserves nothing, which is
+    right for almost everyone: overlapping polls are safe, because SRE Agent hands a job out
+    with one conditional write, so the second of two simultaneous polls is given nothing and
+    starts nothing. A reservation also fails to apply on an account whose total Lambda
+    concurrency is still the new-account limit of 10, because AWS will not let unreserved
+    concurrency fall below 10. Set it only to cap what the poller can use in a busy account.
+  EOT
+  default     = null
+
+  validation {
+    condition     = var.poller_reserved_concurrency == null ? true : var.poller_reserved_concurrency >= 1
+    error_message = "poller_reserved_concurrency must be null (no reservation) or at least 1; 0 would stop every poll."
+  }
+}
+
+variable "alarm_actions" {
+  type        = list(string)
+  description = <<-EOT
+    ARNs (an SNS topic, usually) to notify when the poller has failed for 15 minutes running.
+    The poller raises, so Lambda counts an error, when the API key is refused, the platform
+    is unreachable or its answer cannot be read; those are the failures nobody would
+    otherwise see. Empty (the default) builds no alarm.
+  EOT
+  default     = []
 }
 
 variable "tags" {
