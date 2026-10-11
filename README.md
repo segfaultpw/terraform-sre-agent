@@ -24,6 +24,7 @@ Nothing in the read modules can create, modify or delete.
 | [`aws-ssm-remediation`](modules/aws-ssm-remediation) | Opt-in command execution for automated remediation | `ssm:SendCommand`, scoped by instance tag and SSM document |
 | [`aws-iam-hygiene`](modules/aws-iam-hygiene) | The role behind the AWS IAM hygiene connector (`aws_iam`), so self-healing can deactivate an access key unused for 90 days | `iam:GetUser`, `iam:ListAccessKeys`, `iam:GetAccessKeyLastUsed` and `iam:UpdateAccessKey` on the account's users. Never deletes or creates a key. |
 | [`aws-cleanup`](modules/aws-cleanup) | The role behind the AWS cleanup connector (`aws_cleanup`), so self-healing can delete what scans found unused once deletions are on. Deleting the role stops every deletion | Deletes of IAM access keys and login profiles, EBS volumes, snapshots and images, Elastic IP releases and log retention, each behind its own switch, scoped to resource types, with a Deny on anything tagged `sre-agent:protect`. |
+| [`verifier`](modules/verifier) | Where SRE Agent's sandbox verification runs, in your own account instead of ours | A poller Lambda, Fargate task definitions for the published verifier images, a VPC with outbound HTTPS only, and a task role with no permissions. The poller can start only those tasks; it cannot read anything else in the account. |
 | [`kubernetes-rbac`](modules/kubernetes-rbac) | Read-only cluster access | `get`/`list` on pods, nodes, namespaces, services, deployments, replicasets, jobs, cronjobs, plus metrics and events |
 
 ## Start here
@@ -73,6 +74,16 @@ retention you chose) go through a connector of its own, type **AWS cleanup (dele
 role of its own, which [`aws-cleanup`](modules/aws-cleanup) builds. Deleting that role stops every
 deletion, and anything tagged `sre-agent:protect` is refused by AWS itself. See
 [`examples/aws-cleanup`](examples/aws-cleanup).
+
+## The verifier
+
+SRE Agent can build and test a proposed fix in a sandbox before it opens the pull request. By
+default that sandbox is ours and is metered against your plan. [`verifier`](modules/verifier)
+runs the same verifier images in your account instead: a small poller asks SRE Agent for work over
+an outbound HTTPS request and starts the image for the job it is handed, so **SRE Agent never
+connects to your account**. The code under test runs in a Fargate task with a role that has no
+permissions, no inbound network, and a read-only token for one repository that SRE Agent mints
+when the task claims its job. See [`examples/verifier`](examples/verifier).
 
 ## Why a role rather than an access key
 
@@ -128,6 +139,7 @@ A **major** bump changes variables or removes permissions.
 | Terraform | >= 1.5 |
 | `hashicorp/aws` | >= 5.0 |
 | `hashicorp/kubernetes` | >= 2.24 |
+| `hashicorp/archive` | >= 2.0 (the `verifier` module only) |
 
 ## EKS: what each module lets SRE Agent see
 

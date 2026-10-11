@@ -8,6 +8,24 @@ than a `terraform apply`.
 - **minor**: a permission added, because the product gained a feature needing it
 - **patch**: documentation, validation, formatting; no change to what is granted
 
+## [4.1.0]
+
+### Added
+- `verifier`: a new module, the customer-run verifier. SRE Agent can build and test a proposed
+  fix in a sandbox before it opens the pull request; this module runs that sandbox in your own
+  account, so the cost, the quotas and the isolation rules are yours. It creates a VPC with one
+  public subnet for the NAT gateway and a private subnet per zone (outbound HTTPS only, no
+  inbound), an ECS cluster, one Fargate task definition per runtime you give an image for, a task
+  role with **no permissions** and an execution role, log groups, and a Lambda poller on an
+  EventBridge schedule. The poller asks SRE Agent for work with an organization API key that
+  carries the single scope `verifier:poll` (read from a Secrets Manager secret you create, so the
+  key never enters state) and starts the image for the job it is handed. Nothing existing changes:
+  the module only adds resources when you apply it. The poller's IAM is four statements, none on
+  every resource: write its own logs, read the one secret, `ecs:RunTask` on the verifier task
+  definitions in the one cluster, and `iam:PassRole` on the two task roles to ECS tasks only.
+  The platform never connects to your account; the poller makes outbound HTTPS requests to your
+  SRE Agent and calls ECS in your account.
+
 ## [4.0.0]
 
 ### Removed (major: permissions were removed)

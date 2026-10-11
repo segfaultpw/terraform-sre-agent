@@ -42,6 +42,29 @@ jobs:
             (cd "$dir" && terraform init -backend=false -input=false > /dev/null && terraform test)
           done
 
+  # The verifier module's poller is code that runs in a customer's account, and its task role is
+  # the one thing that must stay empty: the repository's own code runs as it.
+  verifier:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: The poller's tests
+        run: python3 -I -W error::ResourceWarning -m unittest discover -s modules/verifier/lambda -v
+
+      - name: The task role has no permissions
+        run: |
+          set -euo pipefail
+          # Nothing in the module may attach a policy to, or add one on, the task role.
+          if grep -nE '(role|roles)[[:space:]]*=.*aws_iam_role\.task\.' modules/verifier/*.tf; then
+            echo "::error::the verifier task role must have no policies"
+            exit 1
+          fi
+          if grep -nE 'aws_iam_role_policy(_attachment)?"[[:space:]]+"[a-z_]+"' modules/verifier/main.tf | grep -v -E '"(execution|poller)"'; then
+            echo "::error::only the execution role and the poller may have policies"
+            exit 1
+          fi
+
   tflint:
     runs-on: ubuntu-latest
     steps:
