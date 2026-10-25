@@ -79,6 +79,72 @@ jobs:
             exit 1
           fi
 
+  # The fix runner dials out and nothing dials in, and its image switches between two accounts
+  # itself: a listener, a load balancer, a second ingress rule or a posix_user on the access point
+  # would each break one of those. modules/fix-runner/tests pins the same facts on the plan; this
+  # catches the text of an edit before a plan has to.
+  fix-runner:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Nothing connects to the runner, and the access point forces no user
+        run: |
+          set -euo pipefail
+          f=modules/fix-runner/main.tf
+          if grep -nE '^[[:space:]]*(posix_user|load_balancer|ingress|inline_policy)[[:space:]]*\{' "$f"; then
+            echo "::error::the fix runner takes no inbound connection, has no load balancer, and its access point must not set a posix_user"
+            exit 1
+          fi
+          if [ "$(grep -cE '^resource "aws_vpc_security_group_ingress_rule"' "$f")" != 1 ]; then
+            echo "::error::the only ingress rule is NFS from the task to its own volume"
+            exit 1
+          fi
+          if grep -nE 'managed_policy_arns|port_mappings|portMappings' "$f"; then
+            echo "::error::the fix runner has no port, and the task role takes policies only through extra_policy_arns"
+            exit 1
+          fi
+          # The only attachment is "extra" (the task role's extra_policy_arns), and the only inline
+          # policies are the execution role's and the task role's: an AWS managed policy attached to
+          # the execution role would reach every log group and repository.
+          if grep -nE '^resource "aws_iam_role_policy_attachment"' "$f" | grep -v -E '"extra"'; then
+            echo "::error::the only policy attachment is extra, on the task role"
+            exit 1
+          fi
+          if grep -nE '^resource "aws_iam_role_policy"' "$f" | grep -v -E '"(execution|task)"'; then
+            echo "::error::only the execution role and the task role have inline policies"
+            exit 1
+          fi
+          if grep -nE '^resource "(aws_iam_policy_attachment|aws_iam_role_policies_exclusive|aws_iam_role_policy_attachments_exclusive|aws_security_group_rule)"' "$f"; then
+            echo "::error::no aws_iam_policy_attachment, exclusive attachment set or aws_security_group_rule: each reaches a role or a group without showing as one of the module's rules"
+            exit 1
+          fi
+          if [ "$(grep -cE '^resource "aws_vpc_security_group_egress_rule"' "$f")" != 3 ]; then
+            echo "::error::three egress rules only: HTTPS, NFS to the volume, and extra_egress_ports"
+            exit 1
+          fi
+
+      # The runner sends each secret as it is in a request header, and a trailing newline there is
+      # rejected, so a runner whose secrets were made with cat and Enter never polls.
+      - name: The documented way to create a secret writes no trailing newline
+        run: |
+          set -euo pipefail
+          docs="modules/fix-runner/README.md examples/fix-runner/main.tf"
+          if grep -nE 'cat[[:space:]]*>[[:space:]]*value' $docs; then
+            echo "::error::cat and Enter leave a trailing newline in the secret value"
+            exit 1
+          fi
+          for d in $docs; do
+            if ! grep -qF "printf '%s' \"\$value\" > value.txt" "$d"; then
+              echo "::error::$d must write the secret with printf '%s' \"\$value\" > value.txt"
+              exit 1
+            fi
+            if ! grep -qF 'IFS= read -rs value' "$d"; then
+              echo "::error::$d must read the secret with IFS= read -rs value"
+              exit 1
+            fi
+          done
+
   tflint:
     runs-on: ubuntu-latest
     steps:

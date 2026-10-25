@@ -8,6 +8,41 @@ than a `terraform apply`.
 - **minor**: a permission added, because the product gained a feature needing it
 - **patch**: documentation, validation, formatting; no change to what is granted
 
+## [4.2.0]
+
+The `fix-runner` module runs SRE Agent's self-hosted fix runner on ECS Fargate in your own account.
+The runner answers fix requests with your model key and opens the pull request with your GitHub
+token; SRE Agent never connects to your account. The self-hosted fix runner is a plan feature
+(`self_hosted_fix_runner`).
+
+### Added
+- `fix-runner`: a new module. It creates one Fargate service (desired count 1, replaced stop-first,
+  no load balancer, no inbound rule), an encrypted EFS volume mounted at `/workspace` through one
+  access point, so clones, the agent's per-repository homes and its notes survive a replaced task,
+  an S3 bucket the notes are mirrored to (versioned, SSE-S3, every public access block, TLS only),
+  or an existing bucket you name, a log group, and, unless you pass your own, a VPC with a NAT
+  gateway and an ECS cluster. The image defaults to the `sre-agent-opencode` v1.5.0 runner pinned
+  by its multi-architecture digest; a tag is refused.
+- The **task role** grants the workspace volume through the one access point
+  (`elasticfilesystem:ClientMount`, `ClientWrite` and `ClientRootAccess`, the last because the
+  container starts as root and switches to its two accounts itself), list, get, put and delete on
+  the memory prefix only, `kms:Encrypt`, `kms:Decrypt` and `kms:GenerateDataKey` on
+  `memory_bucket_kms_key_arn` only when you set it, and exactly the policies in
+  `extra_policy_arns`. The **execution role** writes the log stream, reads the named secrets
+  (`kms:Decrypt` through Secrets Manager on `secrets_kms_key_arn` when you set it) and pulls from
+  `ecr_repository_arns` when you set them. Nothing is granted on every resource.
+- The agent holds no AWS credentials unless you set `agent_aws_access = true`, which gives it
+  everything the task role holds. `agent_github_token_secret_arn` gives the agent a token of its
+  own (for example read-only); left unset, the agent holds the runner's token, which can push.
+  The module README's "What the agent can reach" says what the two accounts and the scrub stop and
+  what they do not; read it before you grant the task role anything.
+- Inputs that refuse what would move the boundary: `extra_environment` refuses credential-shaped
+  names, the variables the module sets, `SRE_ONCE` and the names that change what the runner and
+  the agent run (`PATH`, `HOME`, `LD_*`, `GIT_*`, `OPENCODE_*` and others), and a setup script
+  outside the image; `extra_egress_ports` opens more outbound TCP ports, 443 always being open.
+
+Nothing existing changes: the module only adds resources when you apply it.
+
 ## [4.1.0]
 
 The `verifier` module serves SRE Agent's customer-run verifier. SRE Agent has published a verifier
