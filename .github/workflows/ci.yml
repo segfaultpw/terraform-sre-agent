@@ -79,6 +79,32 @@ jobs:
             exit 1
           fi
 
+  # The fix runner dials out and nothing dials in, and its image switches between two accounts
+  # itself: a listener, a load balancer, a second ingress rule or a posix_user on the access point
+  # would each break one of those. modules/fix-runner/tests pins the same facts on the plan; this
+  # catches the text of an edit before a plan has to.
+  fix-runner:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Nothing connects to the runner, and the access point forces no user
+        run: |
+          set -euo pipefail
+          f=modules/fix-runner/main.tf
+          if grep -nE '^[[:space:]]*(posix_user|load_balancer|ingress|inline_policy)[[:space:]]*\{' "$f"; then
+            echo "::error::the fix runner takes no inbound connection, has no load balancer, and its access point must not set a posix_user"
+            exit 1
+          fi
+          if [ "$(grep -cE '^resource "aws_vpc_security_group_ingress_rule"' "$f")" != 1 ]; then
+            echo "::error::the only ingress rule is NFS from the task to its own volume"
+            exit 1
+          fi
+          if grep -nE 'managed_policy_arns|port_mappings|portMappings' "$f"; then
+            echo "::error::the fix runner has no port, and the task role takes policies only through extra_policy_arns"
+            exit 1
+          fi
+
   tflint:
     runs-on: ubuntu-latest
     steps:

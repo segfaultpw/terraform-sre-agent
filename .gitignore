@@ -8,3 +8,4 @@ crash.log
 __pycache__/
 *.pyc
 .build/
+.worktrees/
