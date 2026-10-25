@@ -107,11 +107,12 @@ variable "api_key_secret_arn" {
     (arn:aws:secretsmanager:<region>:<account>:secret:<name>-AbCdEf). Its value is the plain SRE
     Agent organization API key that carries the single scope fix_runner:poll (Settings, API Keys),
     not a key/value JSON secret. It becomes SRE_API_KEY. Create the secret yourself, so the key never
-    enters Terraform state. A partial ARN (no suffix) would match nothing in IAM, so it is refused.
+    enters Terraform state, in the Region you deploy to. An ARN without the suffix (a partial ARN)
+    would match nothing in IAM; see the README for exactly what is refused.
   EOT
 
   validation {
-    condition     = can(regex("^arn:aws[a-z-]*:secretsmanager:[a-z0-9-]+:[0-9]{12}:secret:.+-[A-Za-z0-9]{6}$", var.api_key_secret_arn))
+    condition     = can(regex("^arn:aws[a-z-]*:secretsmanager:[a-z0-9-]+:[0-9]{12}:secret:[A-Za-z0-9/_+=.@-]+-[A-Za-z0-9]{6}$", var.api_key_secret_arn))
     error_message = "api_key_secret_arn must be the full Secrets Manager secret ARN, including the six-character suffix (arn:aws:secretsmanager:<region>:<account>:secret:<name>-AbCdEf)."
   }
 }
@@ -126,7 +127,7 @@ variable "github_token_secret_arn" {
   EOT
 
   validation {
-    condition     = can(regex("^arn:aws[a-z-]*:secretsmanager:[a-z0-9-]+:[0-9]{12}:secret:.+-[A-Za-z0-9]{6}$", var.github_token_secret_arn))
+    condition     = can(regex("^arn:aws[a-z-]*:secretsmanager:[a-z0-9-]+:[0-9]{12}:secret:[A-Za-z0-9/_+=.@-]+-[A-Za-z0-9]{6}$", var.github_token_secret_arn))
     error_message = "github_token_secret_arn must be the full Secrets Manager secret ARN, including the six-character suffix."
   }
 }
@@ -145,7 +146,7 @@ variable "agent_github_token_secret_arn" {
   default     = null
 
   validation {
-    condition     = var.agent_github_token_secret_arn == null ? true : can(regex("^arn:aws[a-z-]*:secretsmanager:[a-z0-9-]+:[0-9]{12}:secret:.+-[A-Za-z0-9]{6}$", var.agent_github_token_secret_arn))
+    condition     = var.agent_github_token_secret_arn == null ? true : can(regex("^arn:aws[a-z-]*:secretsmanager:[a-z0-9-]+:[0-9]{12}:secret:[A-Za-z0-9/_+=.@-]+-[A-Za-z0-9]{6}$", var.agent_github_token_secret_arn))
     error_message = "agent_github_token_secret_arn must be the full Secrets Manager secret ARN, including the six-character suffix."
   }
 }
@@ -175,7 +176,7 @@ variable "provider_key_secret_arns" {
   }
 
   validation {
-    condition     = alltrue([for arn in values(var.provider_key_secret_arns) : can(regex("^arn:aws[a-z-]*:secretsmanager:[a-z0-9-]+:[0-9]{12}:secret:.+-[A-Za-z0-9]{6}$", arn))])
+    condition     = alltrue([for arn in values(var.provider_key_secret_arns) : can(regex("^arn:aws[a-z-]*:secretsmanager:[a-z0-9-]+:[0-9]{12}:secret:[A-Za-z0-9/_+=.@-]+-[A-Za-z0-9]{6}$", arn))])
     error_message = "Every provider_key_secret_arns value must be the full Secrets Manager secret ARN, including the six-character suffix, never the key itself."
   }
 }
@@ -217,13 +218,20 @@ variable "extra_policy_arns" {
     Policy ARNs attached to the task role, and nothing else is: this is how an operator grants more
     than the workspace and the memory prefix. They matter to the agent only with agent_aws_access =
     true (the runner itself uses just the workspace and the bucket); without it they are held by
-    the runner's process and by a setup script that runs as root, which can use them.
+    the runner's process and by a setup script that runs as root, which can use them. An ARN of a
+    policy created in the same configuration is fine: only the number of entries must be known at
+    plan time.
   EOT
   default     = []
 
   validation {
     condition     = alltrue([for arn in var.extra_policy_arns : can(regex("^arn:aws[a-z-]*:iam::(aws|[0-9]{12}):policy/.+$", arn))])
     error_message = "Every extra_policy_arns entry must be an IAM policy ARN (arn:aws:iam::aws:policy/<name> or arn:aws:iam::<account>:policy/<name>)."
+  }
+
+  validation {
+    condition     = length(var.extra_policy_arns) == length(distinct(var.extra_policy_arns))
+    error_message = "extra_policy_arns lists a policy twice."
   }
 }
 
@@ -235,6 +243,9 @@ variable "extra_environment" {
     in clear text, so a value is never a credential: a name that looks like one (it contains KEY,
     TOKEN, SECRET, PASSWORD, PASSWD or CREDENTIAL) is refused, and so is any variable this module
     sets itself or carries as a secret, and SRE_ONCE, which would make the runner exit after one poll.
+    Also refused are the names that move the boundary between the runner and the agent: PATH, HOME,
+    ENV, BASH_ENV, NODE_OPTIONS, NODE_PATH, SRE_RUNNER_USER, SRE_AGENT_USER, and any name that
+    starts with LD_, GIT_ or OPENCODE_.
   EOT
   default     = {}
 
@@ -252,6 +263,15 @@ variable "extra_environment" {
       ], name)
     ])
     error_message = "extra_environment cannot set SRE_SERVER_URL, SRE_MODEL, SRE_WORKSPACE, SRE_MEMORY_BUCKET, SRE_MEMORY_PREFIX, SRE_AGENT_AWS_ACCESS, AWS_REGION or AWS_DEFAULT_REGION (this module sets them from its own variables), SRE_API_KEY, SRE_GITHUB_TOKEN or SRE_AGENT_GITHUB_TOKEN (secrets), or SRE_ONCE (the runner would exit after one poll and ECS would restart it in a loop)."
+  }
+
+  validation {
+    condition = alltrue([
+      for name in keys(var.extra_environment) :
+      !contains(["PATH", "HOME", "ENV", "BASH_ENV", "NODE_OPTIONS", "NODE_PATH", "SRE_RUNNER_USER", "SRE_AGENT_USER"], name)
+      && !startswith(name, "LD_") && !startswith(name, "GIT_") && !startswith(name, "OPENCODE_")
+    ])
+    error_message = "extra_environment cannot set PATH, HOME, ENV, BASH_ENV, NODE_OPTIONS, NODE_PATH, SRE_RUNNER_USER, SRE_AGENT_USER or any LD_*, GIT_* or OPENCODE_* name: they change which programs the runner and its entrypoint run, who the runner and the agent are, or what the agent is configured with, and so move the boundary between them. Put tools on the image, and use SRE_RUNNER_SETUP for setup."
   }
 
   validation {
@@ -296,7 +316,9 @@ variable "memory_bucket_name" {
     The name of an existing S3 bucket for the runner's memory mirror. Null (the default) creates one
     (versioning, encryption, public access blocked, TLS only). With an existing bucket the module
     creates and changes nothing on it, so it should already be versioned and encrypted; the task
-    role is granted list, get, put and delete on memory_prefix only.
+    role is granted list, get, put and delete on memory_prefix only. A bucket encrypted with SSE-S3
+    or the AWS managed key aws/s3 needs nothing more; one encrypted with a customer-managed key needs
+    memory_bucket_kms_key_arn.
   EOT
   default     = null
 
@@ -306,18 +328,48 @@ variable "memory_bucket_name" {
   }
 }
 
+variable "memory_bucket_kms_key_arn" {
+  type        = string
+  description = <<-EOT
+    The ARN of the customer-managed KMS key that encrypts the existing memory_bucket_name (a key
+    ARN, not an alias), in the Region you deploy to. The task role is then also allowed
+    kms:Encrypt, kms:Decrypt and kms:GenerateDataKey on that key, only when S3 calls it for this
+    Region. Without it a bucket encrypted with a customer-managed key refuses every upload and
+    restore. Refused without memory_bucket_name: the bucket this module creates uses SSE-S3.
+  EOT
+  default     = null
+
+  validation {
+    condition     = var.memory_bucket_kms_key_arn == null ? true : can(regex("^arn:aws[a-z-]*:kms:[a-z0-9-]+:[0-9]{12}:key/[A-Za-z0-9-]+$", var.memory_bucket_kms_key_arn))
+    error_message = "memory_bucket_kms_key_arn must be a KMS key ARN (arn:aws:kms:<region>:<account>:key/<id>), not an alias or a key id."
+  }
+}
+
 variable "memory_prefix" {
   type        = string
   description = <<-EOT
-    The key prefix the runner mirrors its memory under (SRE_MEMORY_PREFIX), ending in a slash. The
-    task role's access to the bucket stops at this prefix. It cannot be empty, which would grant
-    the whole bucket.
+    The key prefix the runner mirrors its memory under (SRE_MEMORY_PREFIX), ending in one slash. It is
+    held to the rule the runner applies at start, or the task would exit and ECS would restart it
+    in a loop: at most 512 characters, trailing slash included; every part between slashes is
+    letters, digits, dots, underscores and hyphens, and is never empty, "." or "..". The task
+    role's access to the bucket stops at this prefix, so it cannot be empty, which would grant the
+    whole bucket.
   EOT
   default     = "memory/"
 
   validation {
     condition     = can(regex("^([A-Za-z0-9._-]+/)+$", var.memory_prefix))
-    error_message = "memory_prefix must be one or more path segments of letters, digits, dots, underscores and hyphens, each followed by a slash (for example memory/), with no leading slash and no wildcard."
+    error_message = "memory_prefix must be one or more path segments of letters, digits, dots, underscores and hyphens, each followed by a slash (for example memory/), with no leading slash, no empty segment and no wildcard."
+  }
+
+  validation {
+    condition     = alltrue([for part in split("/", var.memory_prefix) : part != "." && part != ".."])
+    error_message = "memory_prefix cannot have a part that is . or .. (the runner refuses it at start)."
+  }
+
+  validation {
+    condition     = length(var.memory_prefix) <= 512
+    error_message = "memory_prefix is at most 512 characters, trailing slash included (the runner refuses a longer one at start)."
   }
 }
 

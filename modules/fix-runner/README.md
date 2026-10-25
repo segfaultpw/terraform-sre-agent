@@ -34,12 +34,18 @@ The self-hosted fix runner is a plan feature (`self_hosted_fix_runner`).
    `fix_runner:poll`. It reaches the job queue and nothing else.
 2. Put three values in Secrets Manager, outside Terraform so they never enter state, and without a
    value ever appearing on a command line (shell history and the process list show arguments).
-   Paste each value into a file only you can read, create the secret from the file, then delete the
-   file. Each value is the plain string, not a key/value JSON secret (the console's default type):
+   Read each value into a shell variable without echoing it, write it to a file only you can read,
+   create the secret from the file, then delete the file. `printf` is a shell builtin, so the value
+   is in no process list. Each value is the plain string, not a key/value JSON secret (the console's
+   default type), and it must have **no trailing newline**: the runner sends the value as it is in a
+   request header, and a header that ends in a newline is rejected, so a runner set up with `cat`
+   and Enter never polls.
 
    ```sh
    umask 077
-   cat > value.txt        # paste the value, press Enter, then Ctrl-D
+   IFS= read -rs value        # bash or zsh: paste the value and press Enter; nothing is echoed
+   printf '%s' "$value" > value.txt
+   unset value
    aws secretsmanager create-secret --name sre-fix-runner-key --secret-string file://value.txt
    rm value.txt
    ```
@@ -49,10 +55,16 @@ The self-hosted fix runner is a plan feature (`self_hosted_fix_runner`).
      fixes (contents and pull requests, write);
    - your model provider's API key.
 
-   Create them in the Region you deploy to. The module needs each secret's **full ARN, with its
-   six-character suffix**, which `create-secret` prints and
+   Create them in the Region you deploy to: the module refuses a secret in another Region. The
+   module needs each secret's **full ARN, with its six-character suffix**, which `create-secret`
+   prints and
    `aws secretsmanager describe-secret --secret-id sre-fix-runner-key --query ARN --output text`
-   shows again.
+   shows again. What is refused is an ARN that is not `arn:aws:secretsmanager:<region>:<account>:secret:`
+   followed by a name of letters, digits and `/_+=.@-`, then a hyphen and exactly six letters or
+   digits. An ARN with no suffix (a partial ARN, which matches nothing in IAM) fails that shape,
+   except when the secret's own name ends in a hyphen and six letters or digits (a secret called
+   `sre-fix-runner-github`): the module cannot tell such a name from a real suffix, so copy the ARN
+   from `create-secret` or `describe-secret`, never build it from the name.
 3. Apply the module. The image is **required**: there is no default yet, and a tag is refused. Pin
    the digest of the `sre-agent-opencode` release you want (from its package page on GHCR). Use a
    release whose README documents `SRE_MEMORY_BUCKET` and `SRE_MEMORY_PREFIX`; an older image
@@ -87,10 +99,10 @@ module "sre_agent_fix_runner" {
 
 | Resource | Notes |
 |---|---|
-| ECS service, one Fargate task | Desired count 1, maximum percent 100, minimum healthy percent 0, no load balancer, deployment circuit breaker on. ARM64 by default, 2 vCPU and 8 GiB. |
+| ECS service, one Fargate task | Desired count 1, maximum percent 100, minimum healthy percent 0, no load balancer, deployment circuit breaker on with rollback. ARM64 by default, 2 vCPU and 8 GiB. |
 | EFS file system, one access point, a mount target per subnet | Encrypted at rest (your KMS key with `efs_kms_key_arn`), TLS enforced by the file system policy and requested in the mount, elastic throughput, cold files to Infrequent Access, daily AWS Backup (`enable_backup`). Mounted at `/workspace`. |
 | S3 bucket (or yours by name) | The memory mirror: versioning, SSE-S3, all four public access blocks, no ACLs, a TLS-only bucket policy, old versions expire after 90 days. |
-| `-task` role | The workspace volume (through the one access point), list/get/put/delete on the memory prefix, and exactly the policies in `extra_policy_arns`. |
+| `-task` role | The workspace volume (through the one access point), list/get/put/delete on the memory prefix, the bucket's key when you set `memory_bucket_kms_key_arn`, and exactly the policies in `extra_policy_arns`. |
 | `-execution` role | Writes the log stream, reads the named secrets (plus `kms:Decrypt` on your key through Secrets Manager, and pulls from named ECR repositories, when you set them). Not available to the agent. |
 | Security groups | The task: **no inbound**; outbound 443 to anywhere, NFS to the volume's group, and `extra_egress_ports`. The volume: NFS from the task's group only. |
 | Log group | `/ecs/<name_prefix>`, 30 days by default. |
@@ -101,16 +113,25 @@ module "sre_agent_fix_runner" {
 
 The queue is not a lease: two runners sharing one key can both collect the same request and do the
 work twice. So the service runs exactly one task and a deployment stops the old task before it
-starts the new one (maximum 100 percent, minimum healthy 0). That also means the volume is never
-mounted by two writers at once. Do not raise `desired_count` by hand.
+starts the new one (maximum 100 percent, minimum healthy 0). Do not raise `desired_count` by hand.
+
+What that does and does not guarantee. ECS counts only tasks that are `RUNNING` or `PENDING`
+against the maximum, so the replacement can be started as soon as the old task has left `RUNNING`,
+which is before the old container has finished stopping. A short overlap of the two is therefore
+possible: the old runner exits on `SIGTERM` within seconds and a Fargate task takes far longer than
+that to start, so in practice the old one is gone first, but the module does not promise it, and it
+does not promise that the volume is never mounted twice at once.
+
+The runner installs no `SIGTERM` handler, so a stop ends it at once. The 120 seconds in the task
+definition (`stopTimeout`, Fargate's maximum) are a ceiling, not a wait: they give nothing to a
+request in flight today, and they are kept so that a runner release that finishes its request on
+`SIGTERM` is not cut short. A request the runner was handling when its task stopped is lost: SRE
+Agent fails it 45 minutes after it was queued, and nothing reaches your default branch.
 
 A replacement is a gap while the new task starts in which the runner is not polling; a request that
 arrives meanwhile waits, or after five minutes without a poll runs on SRE Agent's own agent, which
-the card says. The task is given the longest stop time Fargate allows (120 seconds). A request the
-runner was handling when its task stopped is lost: SRE Agent fails it 45 minutes after it was
-queued, and nothing reaches your default branch. Change the image digest (or any other setting that
-changes the task definition), apply, and ECS does the replacement; the volume and the bucket keep
-the clones and the notes.
+the card says. Change the image digest (or any other setting that changes the task definition),
+apply, and ECS does the replacement; the volume and the bucket keep the clones and the notes.
 
 The container has no health check because the runner has no port. Its health is SRE Agent's: the
 Integrations card says **Polling now**, **Not polling**, **Never polled** or **Switched off**. A
@@ -143,9 +164,21 @@ next upload of that file. The bucket is versioned, so an overwrite or a delete i
 and reported and never fails a request.
 
 The task role may list, get, put and delete under `memory_prefix` and nothing else in the bucket.
+`memory_prefix` is held to the rule the runner applies when it starts, so a value the runner would
+refuse (and so restart in a loop) fails at plan time: it ends in one slash, is at most 512
+characters, and each part between slashes is letters, digits, dots, underscores and hyphens and is
+never empty, `.` or `..`.
+
 An existing bucket (`memory_bucket_name`) is used as it is: the module creates and changes nothing
-on it, so make it versioned and encrypted yourself. Several runners can share one bucket with
-different `memory_prefix` values.
+on it, so make it versioned and encrypted yourself. A bucket encrypted with SSE-S3 or with the AWS
+managed key `aws/s3` works as it is. A bucket encrypted with a **customer-managed KMS key** needs
+`memory_bucket_kms_key_arn` (the key's ARN, not an alias, in the deploy Region): the task role is
+then also allowed `kms:Encrypt`, `kms:Decrypt` and `kms:GenerateDataKey` on that key alone, and only
+when S3 makes the call (`kms:ViaService` is `s3.<region>.amazonaws.com`). Without it every upload
+and the restore are refused, and the runner only logs a warning. The key's own policy must also let
+the task role use it (the module cannot edit a key policy), and the module refuses the variable
+without `memory_bucket_name`, because the bucket it creates is SSE-S3. Several runners can share one
+bucket with different `memory_prefix` values.
 
 **What SRE Agent sees.** Each report lists what the run added, changed or removed in the memory
 (paths, kind of change, size and a short summary the agent wrote), shown as inert text. The
@@ -276,7 +309,11 @@ CLI, `kubectl` and `mise`). Three ways to add more, in the order to try them:
 `extra_environment` is stored in clear text in the task definition, so it never carries a
 credential: a name containing `KEY`, `TOKEN`, `SECRET`, `PASSWORD`, `PASSWD` or `CREDENTIAL` is
 refused, and so is any variable this module sets itself or carries as a secret, and `SRE_ONCE`
-(the runner would exit after one poll and ECS would restart it in a loop).
+(the runner would exit after one poll and ECS would restart it in a loop). Also refused: `PATH`,
+`HOME`, `ENV`, `BASH_ENV`, `NODE_OPTIONS`, `NODE_PATH`, `SRE_RUNNER_USER`, `SRE_AGENT_USER` and any
+name starting with `LD_`, `GIT_` or `OPENCODE_`, because these move the boundary between the runner
+and the agent (which programs the root entrypoint and the runner run, who they run as, and what the
+agent is configured with). Put tools on the image, or install them from a setup script, instead.
 
 ## Inputs
 
@@ -289,16 +326,17 @@ refused, and so is any variable this module sets itself or carries as a secret, 
 | `github_token_secret_arn` | required | Full ARN of the secret holding the token the runner publishes with. Becomes `SRE_GITHUB_TOKEN`. |
 | `provider_key_secret_arns` | required | Environment variable name to the full ARN of the provider's key secret, for example `OPENROUTER_API_KEY`. For a provider the package maps, the key `sre_model` needs must be present. |
 | `agent_github_token_secret_arn` | `null` | A read-only token for the agent alone (`SRE_AGENT_GITHUB_TOKEN`). Null omits it, and the agent holds the runner's token. |
-| `secrets_kms_key_arn` | `null` | The customer-managed key behind the secrets, so the execution role may decrypt them through Secrets Manager. |
+| `secrets_kms_key_arn` | `null` | The customer-managed key behind the secrets, so the execution role may decrypt them through Secrets Manager. Every secret must be in the deploy Region. |
 | `agent_aws_access` | `false` | `true` sets `SRE_AGENT_AWS_ACCESS=1`: the agent holds the task role. |
-| `extra_policy_arns` | `[]` | Policies attached to the task role. Nothing else is. |
-| `extra_environment` | `{}` | Other runner variables as plain values, for example `SRE_RUNNER_SETUP`. |
+| `extra_policy_arns` | `[]` | Policies attached to the task role. Nothing else is. The ARN of a policy created in the same configuration works on the first apply; a policy listed twice is refused. |
+| `extra_environment` | `{}` | Other runner variables as plain values, for example `SRE_RUNNER_SETUP`. Credential-shaped names and the names that move the runner/agent boundary are refused (see above). |
 | `extra_egress_ports` | `[]` | TCP ports besides 443 opened to anywhere. |
 | `cpu_architecture` | `ARM64` | `ARM64` or `X86_64`. |
 | `cpu`, `memory` | `2048`, `8192` | Fargate sizing. A pair Fargate does not offer is refused at plan time. |
 | `ephemeral_storage_gib` | `30` | Scratch beside the volume, 21 to 200. |
 | `memory_bucket_name` | `null` | An existing bucket for the memory mirror. Null creates one. |
-| `memory_prefix` | `memory/` | The mirror's prefix, `SRE_MEMORY_PREFIX`; the task role's bucket access stops here. |
+| `memory_bucket_kms_key_arn` | `null` | The customer-managed key behind an existing `memory_bucket_name`, so the task role may use it through S3. Refused without `memory_bucket_name`. |
+| `memory_prefix` | `memory/` | The mirror's prefix, `SRE_MEMORY_PREFIX`; the task role's bucket access stops here. Held to the runner's own rule: at most 512 characters, no empty, `.` or `..` part. |
 | `memory_noncurrent_version_expiration_days` | `90` | How long old versions of a memory file are kept in the bucket the module creates. |
 | `memory_bucket_force_destroy` | `false` | Let `terraform destroy` delete a bucket that holds objects. |
 | `efs_kms_key_arn` | `null` | A customer-managed key for the volume. |

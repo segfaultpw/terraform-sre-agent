@@ -2,11 +2,19 @@
 # Agent for fix requests, a workspace volume that keeps its clones and notes, and a bucket you own
 # that mirrors the notes.
 #
-# Before applying, create the three secrets once, outside Terraform so no value enters state. Paste
-# each value into a file only you can read (umask 077; cat > value.txt), create the secret with
-# --secret-string file://value.txt so the value is never on a command line, then delete the file.
-# Each value is the plain string, not key/value JSON:
+# Before applying, create the three secrets once, outside Terraform so no value enters state, and
+# with no value on a command line. For each one, in bash or zsh (the value must have no trailing
+# newline, because the runner sends it as it is in a request header and a newline there is
+# rejected; printf is a shell builtin, so the value is in no process list):
 #
+#   umask 077
+#   IFS= read -rs value        # paste the value and press Enter; nothing is echoed
+#   printf '%s' "$value" > value.txt
+#   unset value
+#   aws secretsmanager create-secret --name <name> --secret-string file://value.txt
+#   rm value.txt
+#
+# Each value is the plain string, not key/value JSON. Create them in the Region you deploy to:
 #   1. SRE Agent, Settings, API Keys: a key with the single scope fix_runner:poll.
 #   2. A GitHub token that may push a branch and open a pull request in the repositories to fix
 #      (contents and pull requests, write).

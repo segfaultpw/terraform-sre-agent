@@ -104,6 +104,42 @@ jobs:
             echo "::error::the fix runner has no port, and the task role takes policies only through extra_policy_arns"
             exit 1
           fi
+          # The only attachment is "extra" (the task role's extra_policy_arns), and the only inline
+          # policies are the execution role's and the task role's: an AWS managed policy attached to
+          # the execution role would reach every log group and repository.
+          if grep -nE '^resource "aws_iam_role_policy_attachment"' "$f" | grep -v -E '"extra"'; then
+            echo "::error::the only policy attachment is extra, on the task role"
+            exit 1
+          fi
+          if grep -nE '^resource "aws_iam_role_policy"' "$f" | grep -v -E '"(execution|task)"'; then
+            echo "::error::only the execution role and the task role have inline policies"
+            exit 1
+          fi
+          if [ "$(grep -cE '^resource "aws_vpc_security_group_egress_rule"' "$f")" != 3 ]; then
+            echo "::error::three egress rules only: HTTPS, NFS to the volume, and extra_egress_ports"
+            exit 1
+          fi
+
+      # The runner sends each secret as it is in a request header, and a trailing newline there is
+      # rejected, so a runner whose secrets were made with cat and Enter never polls.
+      - name: The documented way to create a secret writes no trailing newline
+        run: |
+          set -euo pipefail
+          docs="modules/fix-runner/README.md examples/fix-runner/main.tf"
+          if grep -nE 'cat[[:space:]]*>[[:space:]]*value' $docs; then
+            echo "::error::cat and Enter leave a trailing newline in the secret value"
+            exit 1
+          fi
+          for d in $docs; do
+            if ! grep -qF "printf '%s' \"\$value\" > value.txt" "$d"; then
+              echo "::error::$d must write the secret with printf '%s' \"\$value\" > value.txt"
+              exit 1
+            fi
+            if ! grep -qF 'IFS= read -rs value' "$d"; then
+              echo "::error::$d must read the secret with IFS= read -rs value"
+              exit 1
+            fi
+          done
 
   tflint:
     runs-on: ubuntu-latest

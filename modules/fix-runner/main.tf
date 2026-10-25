@@ -7,7 +7,9 @@
  * never connects to your account, so there is no listener, no load balancer and no inbound rule.
  *
  *   - One Fargate task, desired count 1, replaced stop-first (maximum 100 percent, minimum healthy
- *     0): the queue is not a lease, and two tasks would do one request twice.
+ *     0): the queue is not a lease, and two tasks would do one request twice. ECS starts the
+ *     replacement once the old task has left RUNNING, so a short overlap with a task that is still
+ *     stopping is possible.
  *   - /workspace is an encrypted EFS volume, so the clones, the agent's home and its notes survive
  *     a replaced task. The access point sets a root directory and who owns it at creation and no
  *     posix_user, because the image starts as root and its runner switches between two accounts.
@@ -591,42 +593,73 @@ resource "aws_iam_role_policy" "task" {
 
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [
-      {
-        # ClientRootAccess because the container starts as root and the access point does not
-        # change the user; the condition keeps all three to the module's own access point.
-        Sid      = "MountTheWorkspace"
-        Effect   = "Allow"
-        Action   = ["elasticfilesystem:ClientMount", "elasticfilesystem:ClientWrite", "elasticfilesystem:ClientRootAccess"]
-        Resource = aws_efs_file_system.this.arn
-        Condition = {
-          StringEquals = { "elasticfilesystem:AccessPointArn" = aws_efs_access_point.this.arn }
-        }
-      },
-      {
-        Sid      = "ListTheMemoryPrefix"
-        Effect   = "Allow"
-        Action   = ["s3:ListBucket"]
-        Resource = local.bucket_arn
-        Condition = {
-          StringLike = { "s3:prefix" = ["${var.memory_prefix}*"] }
-        }
-      },
-      {
-        Sid      = "ReadWriteAndDeleteTheMemoryPrefix"
-        Effect   = "Allow"
-        Action   = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"]
-        Resource = "${local.bucket_arn}/${var.memory_prefix}*"
-      },
-    ]
+    Statement = concat(
+      [
+        {
+          # ClientRootAccess because the container starts as root and the access point does not
+          # change the user; the condition keeps all three to the module's own access point.
+          Sid      = "MountTheWorkspace"
+          Effect   = "Allow"
+          Action   = ["elasticfilesystem:ClientMount", "elasticfilesystem:ClientWrite", "elasticfilesystem:ClientRootAccess"]
+          Resource = aws_efs_file_system.this.arn
+          Condition = {
+            StringEquals = { "elasticfilesystem:AccessPointArn" = aws_efs_access_point.this.arn }
+          }
+        },
+        {
+          Sid      = "ListTheMemoryPrefix"
+          Effect   = "Allow"
+          Action   = ["s3:ListBucket"]
+          Resource = local.bucket_arn
+          Condition = {
+            StringLike = { "s3:prefix" = ["${var.memory_prefix}*"] }
+          }
+        },
+        {
+          Sid      = "ReadWriteAndDeleteTheMemoryPrefix"
+          Effect   = "Allow"
+          Action   = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"]
+          Resource = "${local.bucket_arn}/${var.memory_prefix}*"
+        },
+      ],
+      var.memory_bucket_kms_key_arn == null ? [] : [
+        {
+          # An existing bucket encrypted with a customer-managed key: every object write needs
+          # GenerateDataKey and every read Decrypt. Only when S3 makes the call, so the key cannot
+          # be used for anything else the role does.
+          Sid      = "UseTheMemoryBucketKey"
+          Effect   = "Allow"
+          Action   = ["kms:Encrypt", "kms:Decrypt", "kms:GenerateDataKey"]
+          Resource = var.memory_bucket_kms_key_arn
+          Condition = {
+            StringEquals = { "kms:ViaService" = "s3.${local.region}.amazonaws.com" }
+          }
+        },
+      ],
+    )
   })
+
+  lifecycle {
+    precondition {
+      condition     = var.memory_bucket_kms_key_arn == null || var.memory_bucket_name != null
+      error_message = "memory_bucket_kms_key_arn is for an existing bucket (memory_bucket_name). The bucket this module creates is encrypted with SSE-S3 and needs no key, and a grant on a key nothing uses is a permission for nothing."
+    }
+
+    precondition {
+      condition     = var.memory_bucket_kms_key_arn == null || split(":", coalesce(var.memory_bucket_kms_key_arn, "::::"))[3] == local.region
+      error_message = "memory_bucket_kms_key_arn is in a different Region than the one this module deploys to. The grant is conditioned on kms:ViaService s3.<this Region>.amazonaws.com, so a key used through another Region's S3 endpoint would never match."
+    }
+  }
 }
 
+# By position, not by value: a for_each over the ARNs needs them at plan time, and the ARN of a
+# policy created in the caller's own configuration is not known until it is created. The length of
+# the list is (and a repeated ARN is refused by the variable).
 resource "aws_iam_role_policy_attachment" "extra" {
-  for_each = toset(var.extra_policy_arns)
+  count = length(var.extra_policy_arns)
 
   role       = aws_iam_role.task.name
-  policy_arn = each.value
+  policy_arn = var.extra_policy_arns[count.index]
 }
 
 ## The task and the service.
@@ -674,8 +707,11 @@ resource "aws_ecs_task_definition" "this" {
       image     = var.image
       essential = true
 
-      # The longest Fargate allows, so a request in flight has the longest chance to finish when
-      # the task is replaced.
+      # Fargate's longest stop time, a ceiling and not a wait. The runner installs no SIGTERM
+      # handler, so on a stop the init process forwards SIGTERM, node exits at once and the
+      # container ends in seconds, with a request in flight lost. The ceiling is kept at the
+      # maximum so that a runner release which finishes its request on SIGTERM is not cut short
+      # by a module that asked for less.
       stopTimeout = 120
 
       environment = [for name in sort(keys(local.environment)) : { name = name, value = local.environment[name] }]
@@ -717,6 +753,11 @@ resource "aws_ecs_task_definition" "this" {
     }
 
     precondition {
+      condition     = alltrue([for arn in values(local.secret_env) : split(":", arn)[3] == local.region])
+      error_message = "A secret is in a different Region than the one this module deploys to. ECS reads each secret through its own Region's endpoint at task start, and the execution role's kms:ViaService condition names this Region, so keep every secret in the deploy Region."
+    }
+
+    precondition {
       condition     = local.expected_provider_key == null || contains(keys(var.provider_key_secret_arns), local.expected_provider_key)
       error_message = "sre_model ${var.sre_model} reads its key from ${coalesce(local.expected_provider_key, "its provider's variable")}, which provider_key_secret_arns does not hold. Add it, or the agent would call the model with no key."
     }
@@ -731,7 +772,10 @@ resource "aws_ecs_service" "this" {
 
   # One runner. The queue is not a lease: two tasks sharing one key can both collect the same
   # request and do the work twice, so a deployment stops the old task before it starts the new
-  # one and the volume is never mounted by two writers at once.
+  # one. ECS counts only RUNNING and PENDING tasks against the maximum, so the replacement can be
+  # provisioned once the old task has left RUNNING, while it is still stopping: a short overlap
+  # (the old runner exits on SIGTERM in seconds, a Fargate start takes far longer) is possible, and
+  # the module does not claim more than that.
   desired_count                      = 1
   deployment_maximum_percent         = 100
   deployment_minimum_healthy_percent = 0

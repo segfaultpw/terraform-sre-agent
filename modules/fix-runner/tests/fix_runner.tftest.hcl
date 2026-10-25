@@ -105,6 +105,11 @@ run "one_task_that_is_replaced_stop_first_with_no_load_balancer" {
     condition     = aws_ecs_service.this.network_configuration[0].security_groups == toset([aws_security_group.tasks.id])
     error_message = "the service uses the module's security group"
   }
+
+  assert {
+    condition     = aws_ecs_service.this.deployment_circuit_breaker[0].enable == true && aws_ecs_service.this.deployment_circuit_breaker[0].rollback == true
+    error_message = "a deployment that cannot start rolls back to the task that was running, instead of retrying with no one watching"
+  }
 }
 
 run "the_runner_is_arm64_unless_asked_otherwise" {
@@ -169,7 +174,7 @@ run "the_container_starts_as_root_and_keeps_the_default_capabilities" {
 
   assert {
     condition     = jsondecode(aws_ecs_task_definition.this.container_definitions)[0].stopTimeout == 120
-    error_message = "the longest stop Fargate allows, so a request in flight gets the longest chance to finish"
+    error_message = "Fargate's longest stop time, a ceiling and not a wait: today the runner exits on SIGTERM at once, and a runner release that finishes the request in flight on SIGTERM needs the time"
   }
 
   assert {
@@ -351,8 +356,22 @@ run "the_execution_role_reads_only_the_named_secrets" {
   }
 
   assert {
-    condition     = length(aws_iam_role.execution.managed_policy_arns) == 0
-    error_message = "no AWS managed policy (they are granted on every log group and repository)"
+    condition     = length(aws_iam_role.execution.managed_policy_arns) == 0 && length(aws_iam_role.execution.inline_policy) == 0
+    error_message = "nothing is embedded in the execution role itself"
+  }
+
+  # An aws_iam_role_policy_attachment does not show in the role's managed_policy_arns, so an
+  # AWS managed execution policy (every log group and every repository) attached to this role
+  # is only visible in the module's own text: the only attachment resource is "extra", for the
+  # task role, and the only inline policies are "execution" and "task".
+  assert {
+    condition     = length(regexall("(?m)^resource \"aws_iam_role_policy_attachment\" ", file("${path.module}/main.tf"))) == 1 && length(regexall("(?m)^resource \"aws_iam_role_policy_attachment\" \"extra\" ", file("${path.module}/main.tf"))) == 1
+    error_message = "the only policy attachment is extra, on the task role"
+  }
+
+  assert {
+    condition     = length(regexall("(?m)^resource \"aws_iam_role_policy\" ", file("${path.module}/main.tf"))) == 2 && length(regexall("(?m)^resource \"aws_iam_role_policy\" \"(execution|task)\" ", file("${path.module}/main.tf"))) == 2
+    error_message = "the only inline policies are execution and task"
   }
 }
 
@@ -499,6 +518,81 @@ run "a_partial_agent_token_arn_is_refused" {
   }
 
   expect_failures = [var.agent_github_token_secret_arn]
+}
+
+run "an_arn_whose_name_has_a_character_secrets_manager_forbids_is_refused" {
+  command = plan
+
+  variables {
+    api_key_secret_arn = "arn:aws:secretsmanager:us-east-1:123456789012:secret:bad name-AbCdEf"
+  }
+
+  expect_failures = [var.api_key_secret_arn]
+}
+
+run "an_arn_whose_suffix_is_longer_than_six_characters_is_refused" {
+  command = plan
+
+  variables {
+    github_token_secret_arn = "arn:aws:secretsmanager:us-east-1:123456789012:secret:sre-fix-runner-github-GhIjKlM"
+  }
+
+  expect_failures = [var.github_token_secret_arn]
+}
+
+run "a_name_with_slashes_and_the_other_allowed_characters_is_accepted" {
+  command = apply
+
+  variables {
+    api_key_secret_arn = "arn:aws:secretsmanager:us-east-1:123456789012:secret:team/sre.fix_runner+key=1@x-AbCdEf"
+  }
+
+  assert {
+    condition     = contains([for s in jsondecode(aws_ecs_task_definition.this.container_definitions)[0].secrets : s.valueFrom], var.api_key_secret_arn)
+    error_message = "the name characters Secrets Manager allows are not refused"
+  }
+}
+
+run "a_secret_in_another_region_is_refused_for_the_api_key" {
+  command = plan
+
+  variables {
+    api_key_secret_arn = "arn:aws:secretsmanager:us-west-2:123456789012:secret:sre-fix-runner-key-AbCdEf"
+  }
+
+  expect_failures = [aws_ecs_task_definition.this]
+}
+
+run "a_secret_in_another_region_is_refused_for_the_github_token" {
+  command = plan
+
+  variables {
+    github_token_secret_arn = "arn:aws:secretsmanager:eu-west-1:123456789012:secret:sre-fix-runner-github-GhIjKl"
+  }
+
+  expect_failures = [aws_ecs_task_definition.this]
+}
+
+run "a_secret_in_another_region_is_refused_for_a_provider_key" {
+  command = plan
+
+  variables {
+    provider_key_secret_arns = {
+      OPENROUTER_API_KEY = "arn:aws:secretsmanager:us-west-2:123456789012:secret:openrouter-key-MnOpQr"
+    }
+  }
+
+  expect_failures = [aws_ecs_task_definition.this]
+}
+
+run "a_secret_in_another_region_is_refused_for_the_agent_token" {
+  command = plan
+
+  variables {
+    agent_github_token_secret_arn = "arn:aws:secretsmanager:us-west-2:123456789012:secret:agent-readonly-StUvWx"
+  }
+
+  expect_failures = [aws_ecs_task_definition.this]
 }
 
 run "a_provider_key_that_is_not_an_arn_is_refused" {
@@ -685,14 +779,54 @@ run "the_task_role_is_given_exactly_the_policies_the_operator_names" {
   }
 
   assert {
-    condition     = toset(keys(aws_iam_role_policy_attachment.extra)) == toset(var.extra_policy_arns)
-    error_message = "exactly extra_policy_arns"
+    condition     = tolist([for a in aws_iam_role_policy_attachment.extra : a.policy_arn]) == var.extra_policy_arns
+    error_message = "exactly extra_policy_arns, one attachment each, in the order given"
   }
 
   assert {
-    condition     = alltrue([for a in values(aws_iam_role_policy_attachment.extra) : a.role == aws_iam_role.task.name])
+    condition     = alltrue([for a in aws_iam_role_policy_attachment.extra : a.role == aws_iam_role.task.name])
     error_message = "attached to the task role, not to the execution role"
   }
+}
+
+run "a_policy_made_in_the_same_configuration_can_be_attached_on_the_first_apply" {
+  command = plan
+
+  module {
+    source = "./tests/with_policy"
+  }
+
+  override_data {
+    target = module.runner.data.aws_partition.current
+    values = {
+      partition = "aws"
+    }
+  }
+
+  override_data {
+    target = module.runner.data.aws_caller_identity.current
+    values = {
+      account_id = "123456789012"
+    }
+  }
+
+  assert {
+    condition     = length(module.runner.task_role_name) > 0
+    error_message = "the plan is built even though the policy's ARN is not known until it is created"
+  }
+}
+
+run "the_same_extra_policy_twice_is_refused" {
+  command = plan
+
+  variables {
+    extra_policy_arns = [
+      "arn:aws:iam::aws:policy/ReadOnlyAccess",
+      "arn:aws:iam::aws:policy/ReadOnlyAccess",
+    ]
+  }
+
+  expect_failures = [var.extra_policy_arns]
 }
 
 run "an_extra_policy_that_is_not_an_arn_is_refused" {
@@ -898,6 +1032,165 @@ run "extra_environment_cannot_name_something_that_is_not_a_variable" {
   expect_failures = [var.extra_environment]
 }
 
+run "extra_environment_cannot_set_path" {
+  command = plan
+
+  variables {
+    extra_environment = { PATH = "x" }
+  }
+
+  expect_failures = [var.extra_environment]
+}
+
+run "extra_environment_cannot_set_home" {
+  command = plan
+
+  variables {
+    extra_environment = { HOME = "x" }
+  }
+
+  expect_failures = [var.extra_environment]
+}
+
+run "extra_environment_cannot_set_env" {
+  command = plan
+
+  variables {
+    extra_environment = { ENV = "x" }
+  }
+
+  expect_failures = [var.extra_environment]
+}
+
+run "extra_environment_cannot_set_bash_env" {
+  command = plan
+
+  variables {
+    extra_environment = { BASH_ENV = "x" }
+  }
+
+  expect_failures = [var.extra_environment]
+}
+
+run "extra_environment_cannot_set_node_options" {
+  command = plan
+
+  variables {
+    extra_environment = { NODE_OPTIONS = "x" }
+  }
+
+  expect_failures = [var.extra_environment]
+}
+
+run "extra_environment_cannot_set_node_path" {
+  command = plan
+
+  variables {
+    extra_environment = { NODE_PATH = "x" }
+  }
+
+  expect_failures = [var.extra_environment]
+}
+
+run "extra_environment_cannot_set_ld_preload" {
+  command = plan
+
+  variables {
+    extra_environment = { LD_PRELOAD = "x" }
+  }
+
+  expect_failures = [var.extra_environment]
+}
+
+run "extra_environment_cannot_set_ld_library_path" {
+  command = plan
+
+  variables {
+    extra_environment = { LD_LIBRARY_PATH = "x" }
+  }
+
+  expect_failures = [var.extra_environment]
+}
+
+run "extra_environment_cannot_set_git_ssh_command" {
+  command = plan
+
+  variables {
+    extra_environment = { GIT_SSH_COMMAND = "x" }
+  }
+
+  expect_failures = [var.extra_environment]
+}
+
+run "extra_environment_cannot_set_git_config_global" {
+  command = plan
+
+  variables {
+    extra_environment = { GIT_CONFIG_GLOBAL = "x" }
+  }
+
+  expect_failures = [var.extra_environment]
+}
+
+run "extra_environment_cannot_set_opencode_config" {
+  command = plan
+
+  variables {
+    extra_environment = { OPENCODE_CONFIG = "x" }
+  }
+
+  expect_failures = [var.extra_environment]
+}
+
+run "extra_environment_cannot_set_opencode_config_dir" {
+  command = plan
+
+  variables {
+    extra_environment = { OPENCODE_CONFIG_DIR = "x" }
+  }
+
+  expect_failures = [var.extra_environment]
+}
+
+run "extra_environment_cannot_set_sre_runner_user" {
+  command = plan
+
+  variables {
+    extra_environment = { SRE_RUNNER_USER = "x" }
+  }
+
+  expect_failures = [var.extra_environment]
+}
+
+run "extra_environment_cannot_set_sre_agent_user" {
+  command = plan
+
+  variables {
+    extra_environment = { SRE_AGENT_USER = "x" }
+  }
+
+  expect_failures = [var.extra_environment]
+}
+
+run "names_that_only_resemble_a_refused_class_are_accepted" {
+  command = apply
+
+  variables {
+    extra_environment = {
+      PATHS      = "a"
+      LDAP_URL   = "ldaps://ldap.example.com"
+      GITHUB_ORG = "example"
+      OPENCODEX  = "1"
+      TZ         = "UTC"
+    }
+  }
+
+  assert {
+    condition     = length(jsondecode(aws_ecs_task_definition.this.container_definitions)[0].environment) == 12
+    error_message = "the refusal is of PATH, HOME, ENV, BASH_ENV, NODE_OPTIONS, NODE_PATH, LD_*, GIT_*, OPENCODE_* and the two account names, not of names that start the same way"
+  }
+}
+
 ## The network
 
 run "the_security_group_has_no_inbound_and_https_out" {
@@ -934,8 +1227,38 @@ run "the_security_group_has_no_inbound_and_https_out" {
   }
 
   assert {
+    condition     = aws_vpc_security_group_ingress_rule.efs.security_group_id == aws_security_group.efs.id
+    error_message = "the NFS rule is on the volume's group, so the volume accepts the tasks and the tasks' group accepts nothing"
+  }
+
+  assert {
+    condition     = aws_vpc_security_group_egress_rule.https.security_group_id == aws_security_group.tasks.id && aws_vpc_security_group_egress_rule.nfs.security_group_id == aws_security_group.tasks.id
+    error_message = "the 443 and NFS rules are on the tasks' group, not on the volume's"
+  }
+
+  assert {
     condition     = aws_security_group.tasks.ingress == null || length(aws_security_group.tasks.ingress) == 0
     error_message = "no inline ingress on the tasks' group"
+  }
+
+  assert {
+    condition     = aws_security_group.tasks.egress == null || length(aws_security_group.tasks.egress) == 0
+    error_message = "no inline egress on the tasks' group: every way out is one of the module's rules"
+  }
+
+  assert {
+    condition     = aws_security_group.efs.ingress == null || length(aws_security_group.efs.ingress) == 0
+    error_message = "no inline ingress on the volume's group"
+  }
+
+  assert {
+    condition     = aws_security_group.efs.egress == null || length(aws_security_group.efs.egress) == 0
+    error_message = "the volume's group has no way out"
+  }
+
+  assert {
+    condition     = length(regexall("(?m)^resource \"aws_vpc_security_group_egress_rule\" ", file("${path.module}/main.tf"))) == 3 && length(regexall("(?m)^resource \"aws_vpc_security_group_ingress_rule\" ", file("${path.module}/main.tf"))) == 1
+    error_message = "three egress rules (443, the volume, the operator's ports) and one ingress rule (NFS from the tasks to the volume); another rule is a way in or out nobody reviewed"
   }
 }
 
@@ -954,6 +1277,11 @@ run "extra_egress_ports_open_those_ports_to_anywhere_and_no_others" {
   assert {
     condition     = alltrue([for r in values(aws_vpc_security_group_egress_rule.extra) : r.from_port == r.to_port && r.ip_protocol == "tcp" && r.cidr_ipv4 == "0.0.0.0/0"])
     error_message = "tcp, one port each, to anywhere"
+  }
+
+  assert {
+    condition     = alltrue([for r in values(aws_vpc_security_group_egress_rule.extra) : r.security_group_id == aws_security_group.tasks.id])
+    error_message = "on the tasks' group, not on the volume's"
   }
 }
 
@@ -1457,6 +1785,177 @@ run "a_prefix_that_starts_with_a_slash_is_refused" {
   }
 
   expect_failures = [var.memory_prefix]
+}
+
+run "a_prefix_with_a_dot_part_is_refused" {
+  command = plan
+
+  variables {
+    memory_prefix = "./"
+  }
+
+  expect_failures = [var.memory_prefix]
+}
+
+run "a_prefix_with_a_dot_dot_part_is_refused" {
+  command = plan
+
+  variables {
+    memory_prefix = "../"
+  }
+
+  expect_failures = [var.memory_prefix]
+}
+
+run "a_prefix_with_a_dot_dot_part_in_the_middle_is_refused" {
+  command = plan
+
+  variables {
+    memory_prefix = "a/../"
+  }
+
+  expect_failures = [var.memory_prefix]
+}
+
+run "a_prefix_with_a_dot_part_in_the_middle_is_refused" {
+  command = plan
+
+  variables {
+    memory_prefix = "a/./b/"
+  }
+
+  expect_failures = [var.memory_prefix]
+}
+
+run "a_prefix_with_an_empty_part_is_refused" {
+  command = plan
+
+  variables {
+    memory_prefix = "a//b/"
+  }
+
+  expect_failures = [var.memory_prefix]
+}
+
+run "a_prefix_of_exactly_512_characters_is_accepted" {
+  command = apply
+
+  variables {
+    memory_prefix = "${substr(join("", [for i in range(60) : "0123456789"]), 0, 511)}/"
+  }
+
+  assert {
+    condition     = length(var.memory_prefix) == 512
+    error_message = "the runner accepts a prefix up to 512 characters, trailing slash included"
+  }
+}
+
+run "a_prefix_longer_than_512_characters_is_refused" {
+  command = plan
+
+  variables {
+    memory_prefix = "${substr(join("", [for i in range(60) : "0123456789"]), 0, 512)}/"
+  }
+
+  expect_failures = [var.memory_prefix]
+}
+
+run "a_prefix_with_dots_inside_a_name_is_accepted" {
+  command = apply
+
+  variables {
+    memory_prefix = "team.a/..hidden/v1.0/"
+  }
+
+  assert {
+    condition     = contains([for e in jsondecode(aws_ecs_task_definition.this.container_definitions)[0].environment : "${e.name}=${e.value}"], "SRE_MEMORY_PREFIX=team.a/..hidden/v1.0/")
+    error_message = "a dot is refused only as a whole part, as the runner refuses it"
+  }
+}
+
+## An existing bucket encrypted with a customer-managed key
+
+run "a_customer_managed_bucket_key_is_granted_through_s3_and_on_that_key_only" {
+  command = apply
+
+  variables {
+    memory_bucket_name        = "my-existing-notes-bucket"
+    memory_bucket_kms_key_arn = "arn:aws:kms:us-east-1:123456789012:key/11111111-2222-3333-4444-555555555555"
+  }
+
+  assert {
+    condition = toset([
+      for s in jsondecode(aws_iam_role_policy.task.policy).Statement : s.Action if s.Sid == "UseTheMemoryBucketKey"
+    ][0]) == toset(["kms:Encrypt", "kms:Decrypt", "kms:GenerateDataKey"])
+    error_message = "the three actions an SSE-KMS object write and read need, nothing else"
+  }
+
+  assert {
+    condition = [
+      for s in jsondecode(aws_iam_role_policy.task.policy).Statement : s.Resource if s.Sid == "UseTheMemoryBucketKey"
+    ][0] == "arn:aws:kms:us-east-1:123456789012:key/11111111-2222-3333-4444-555555555555"
+    error_message = "on the one key"
+  }
+
+  assert {
+    condition = [
+      for s in jsondecode(aws_iam_role_policy.task.policy).Statement : s.Condition if s.Sid == "UseTheMemoryBucketKey"
+    ][0] == { StringEquals = { "kms:ViaService" = "s3.us-east-1.amazonaws.com" } }
+    error_message = "only when S3 asks, in this Region"
+  }
+
+  assert {
+    condition = alltrue([
+      for s in jsondecode(aws_iam_role_policy.task.policy).Statement :
+      !contains(flatten([s.Resource]), "*")
+    ])
+    error_message = "no statement is on every resource"
+  }
+}
+
+run "without_a_bucket_key_the_task_role_holds_no_kms_permission" {
+  command = apply
+
+  variables {
+    memory_bucket_name = "my-existing-notes-bucket"
+  }
+
+  assert {
+    condition     = !anytrue([for s in jsondecode(aws_iam_role_policy.task.policy).Statement : anytrue([for a in flatten([s.Action]) : startswith(a, "kms:")])])
+    error_message = "no key, no grant"
+  }
+}
+
+run "a_bucket_key_alias_is_refused_because_iam_needs_the_key" {
+  command = plan
+
+  variables {
+    memory_bucket_name        = "my-existing-notes-bucket"
+    memory_bucket_kms_key_arn = "arn:aws:kms:us-east-1:123456789012:alias/notes"
+  }
+
+  expect_failures = [var.memory_bucket_kms_key_arn]
+}
+
+run "a_bucket_key_is_refused_for_the_bucket_the_module_creates" {
+  command = plan
+
+  variables {
+    memory_bucket_kms_key_arn = "arn:aws:kms:us-east-1:123456789012:key/11111111-2222-3333-4444-555555555555"
+  }
+
+  expect_failures = [aws_iam_role_policy.task]
+}
+
+run "a_bucket_key_in_another_region_is_refused" {
+  command = plan
+
+  variables {
+    memory_bucket_name        = "my-existing-notes-bucket"
+    memory_bucket_kms_key_arn = "arn:aws:kms:eu-west-1:123456789012:key/11111111-2222-3333-4444-555555555555"
+  }
+
+  expect_failures = [aws_iam_role_policy.task]
 }
 
 run "a_bucket_name_that_is_not_one_is_refused" {
