@@ -25,8 +25,7 @@ SRE Agent  <---- HTTPS long poll (outbound only) ----  Fargate task (desired cou
 
 ## Availability
 
-The self-hosted fix runner is a plan feature (`self_hosted_fix_runner`). A runner of an
-organization without it is refused by the queue and says so in its log.
+The self-hosted fix runner is a plan feature (`self_hosted_fix_runner`).
 
 ## Usage
 
@@ -105,7 +104,7 @@ work twice. So the service runs exactly one task and a deployment stops the old 
 starts the new one (maximum 100 percent, minimum healthy 0). That also means the volume is never
 mounted by two writers at once. Do not raise `desired_count` by hand.
 
-A replacement is a gap of about a minute in which the runner is not polling; a request that
+A replacement is a gap while the new task starts in which the runner is not polling; a request that
 arrives meanwhile waits, or after five minutes without a poll runs on SRE Agent's own agent, which
 the card says. The task is given the longest stop time Fargate allows (120 seconds). A request the
 runner was handling when its task stopped is lost: SRE Agent fails it 45 minutes after it was
@@ -214,8 +213,10 @@ cannot install system packages; and it has no AWS credentials unless you opt in.
 - **Files any account may read** in the image, and the repositories' own code and test scripts,
   which run as the agent.
 - **A setup script.** If you set `SRE_RUNNER_SETUP` (below) it runs as root, before the first poll,
-  with the task role's credentials in its environment (it is not given `SRE_API_KEY` or
-  `SRE_GITHUB_TOKEN`). It is yours; keep it short and idempotent.
+  with an allowlisted environment (`PATH`, the locale and time zone, the proxy variables and your
+  own `SRE_SETUP_*` variables): the poll key, both GitHub tokens, the model key and the task role's
+  credential variables are not in it. It is root in the container, so it is as trusted as the
+  image itself. It is yours; keep it short and idempotent.
 
 **`agent_aws_access` and `extra_policy_arns`.** By default (`agent_aws_access = false`) the module
 sets nothing and the agent has no AWS access: the runner, not the agent, uses the task role (the
@@ -225,7 +226,7 @@ holds**: the workspace volume, the memory prefix (versioned, so an overwrite or 
 recoverable) and every policy in `extra_policy_arns`. That is how you let a diagnosis read the
 live estate: attach a read-only policy of your own, set both, and keep the policy to reads.
 `extra_policy_arns` without `agent_aws_access` grants nothing to the agent; only the runner
-process and a setup script can use it. Never attach a policy that writes to a place whose loss you
+process can use it (and a setup script, which runs as root in the container). Never attach a policy that writes to a place whose loss you
 cannot recover.
 
 **Give the runner an account of its own** if your other workloads hold production credentials. A
@@ -265,7 +266,7 @@ CLI, `kubectl` and `mise`). Three ways to add more, in the order to try them:
    from (for a private ECR repository set `ecr_repository_arns`) and pass its digest as `image`.
 
 ```hcl
-  image             = "123456789012.dkr.ecr.us-east-1.amazonaws.com/fix-runner@sha256:<64 hex digits>"
+  image               = "123456789012.dkr.ecr.us-east-1.amazonaws.com/fix-runner@sha256:<64 hex digits>"
   ecr_repository_arns = ["arn:aws:ecr:us-east-1:123456789012:repository/fix-runner"]
   extra_environment = {
     SRE_RUNNER_SETUP = "/opt/setup.sh"
@@ -335,7 +336,6 @@ refused, and so is any variable this module sets itself or carries as a secret, 
 - **The notes themselves:** `aws s3 ls s3://<memory_bucket_name>/<memory_prefix> --recursive`, and
   the versions of any file with `aws s3api list-object-versions`; or on the volume, through a task
   that mounts the same access point.
-- **CloudTrail:** the task role's use of the bucket and the volume is under its role session name.
 
 ## Cost
 
