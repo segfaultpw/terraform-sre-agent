@@ -85,9 +85,11 @@ connects to your account**. The code under test runs in a Fargate task with a ro
 permissions, no inbound network, and a read-only token for one repository that SRE Agent mints
 when the task claims its job. See [`examples/verifier`](examples/verifier).
 
-The module ships ahead of the SRE Agent feature and is tagged (v4.1.0) when the customer-run
-verifier is switched on; until SRE Agent publishes its first verifier image digests it answers
-every poller with "no image is published yet".
+The verifier images are published, and the module README lists the current digest for each runtime.
+The feature is lit per organization (a plan that includes code improvement, turned on for your
+organization); a poller of an organization where it is not lit is answered `403
+feature_not_available` and backs off. The tasks' network is yours: SRE Agent's per-repository
+network setting is not enforced on a verifier you run. See [`modules/verifier`](modules/verifier).
 
 ## Why a role rather than an access key
 

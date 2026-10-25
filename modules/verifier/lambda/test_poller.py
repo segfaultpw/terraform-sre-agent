@@ -169,6 +169,28 @@ class PollerTest(unittest.TestCase):
         self.assertNotIn("sre_ak_test_key", wire)
         self.assertNotIn("AWS_", wire)
 
+    def test_a_session_job_starts_the_task_exactly_as_a_run_does(self):
+        session = dict(
+            JOB,
+            kind="session",
+            run_id="22222222-2222-2222-2222-222222222222",
+            wall_clock_seconds=1800,
+            bootstrap_url="https://platform.test/webhooks/verifier/sessions/2/sig/bootstrap",
+        )
+        _platform, ecs, result = self.invoke(200, {"data": [session], "refused": []})
+
+        self.assertEqual(result, {"status": 200, "jobs": 1, "started": 1})
+        [request] = ecs.calls
+        self.assertEqual(request["taskDefinition"], "arn:aws:ecs:us-east-1:1:task-definition/v-node:3")
+        self.assertEqual(request["startedBy"], "sre-agent-verifier-poller")
+        self.assertEqual(request["overrides"]["cpu"], "1024")
+        [override] = request["overrides"]["containerOverrides"]
+        self.assertEqual(override["environment"], [{"name": "BOOTSTRAP_URL", "value": session["bootstrap_url"]}])
+
+        wire = json.dumps(request)
+        self.assertNotIn("1800", wire)
+        self.assertNotIn("kind", wire)
+
     def test_no_job_starts_nothing(self):
         _platform, ecs, result = self.invoke(200, {"data": [], "refused": []})
         self.assertEqual(result["jobs"], 0)

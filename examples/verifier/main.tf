@@ -6,9 +6,13 @@
 # key never enters state:
 #
 #   1. SRE Agent, Settings, API Keys: create a key with the single scope verifier:poll.
-#   2. aws secretsmanager create-secret --name sre-agent-verifier-key --secret-string <the key>
+#   2. Paste the key into a file only you can read (umask 077; cat > verifier-key.txt), create the
+#      secret with --secret-string file://verifier-key.txt so the key is never on a command line,
+#      then delete the file. The value is the plain key, not key/value JSON.
 #
-# Then take the image digests from the list in the SRE Agent documentation, and apply.
+# Then pass the secret's full ARN (with its six-character suffix) as api_key_secret_arn, and the
+# image digests from the "Published images" table in modules/verifier/README.md as images (the
+# Integrations card in SRE Agent shows what it accepts now), and apply.
 
 terraform {
   required_version = ">= 1.5"

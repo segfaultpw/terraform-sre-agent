@@ -10,10 +10,11 @@ than a `terraform apply`.
 
 ## [4.1.0]
 
-The `verifier` module was written ahead of the SRE Agent feature it serves and is tagged v4.1.0
-only when that feature is lit, which is when SRE Agent publishes its first verifier image
-digests. Before that SRE Agent answers every poller with `426` ("no image is published yet") and
-shows no Integrations card, so a module call cannot succeed.
+The `verifier` module serves SRE Agent's customer-run verifier. SRE Agent has published a verifier
+image for each of the six runtimes (the module README lists the current digests), and the feature
+is lit per organization: a plan that includes code improvement, turned on for the organization. A
+poller of an organization where it is not lit is answered `403 feature_not_available` and backs
+off.
 
 ### Added
 - `verifier`: a new module, the customer-run verifier. SRE Agent can build and test a proposed
@@ -29,11 +30,24 @@ shows no Integrations card, so a module call cannot succeed.
   every resource: write its own logs, read the one secret, `ecs:RunTask` on the verifier task
   definitions in the one cluster, and `iam:PassRole` on the two task roles to ECS tasks only.
   The platform never connects to your account; the poller makes outbound HTTPS requests to your
-  SRE Agent and calls ECS in your account.
+  SRE Agent and calls ECS in your account. The tasks' network is yours: egress is TCP 443 to
+  anywhere (Fargate's image pull and log delivery ignore a proxy, so it cannot be narrowed to
+  one), and SRE Agent's per-repository network setting is not enforced on it.
 - `verifier`: `poller_reserved_concurrency` (default `null`, no reservation: overlapping polls are
   safe, and a reservation fails to apply on an account whose Lambda concurrency is still the
-  new-account 10), `alarm_actions` (an optional alarm on the poller's `Errors`) and validation of
-  `availability_zones` (one to three) and `egress_cidrs` (CIDR blocks). A failed poll is not
+  new-account 10), `alarm_actions` (two optional alarms on the same actions: the poller's
+  `Errors`, and a metric filter on its `level=error` log lines, which also covers an image or
+  poller SRE Agent refuses with `426`, a `RunTask` ECS refused and a job for a runtime with no task
+  definition, none of which raise), `log_kms_key_arn` (a customer-managed key for both log groups),
+  `ecr_repository_arns` (the execution role pulls from named private repositories only; it has no
+  ECR permission by default) and validation of `availability_zones` (one to three),
+  `api_key_secret_arn` (the full ARN with its suffix, in the deployment Region),
+  `api_key_kms_key_arn` (a key ARN; the grant is limited to Secrets Manager and the one secret),
+  `poll_schedule_expression` (`rate(1 minute)` to `rate(5 minutes)`, because SRE Agent treats a
+  poller silent for 5 minutes as gone), `log_retention_days` (a value CloudWatch offers) and
+  `vpc_cidr` (/16 to /24). `no_proxy` defaults to `localhost,127.0.0.1,::1`. The execution role has
+  an inline policy for its own log stream instead of the AWS managed policy, the two ECS roles
+  trust ECS tasks of the account only, and the poller's timeout is 60 seconds. A failed poll is not
   retried by Lambda; the next scheduled poll is the retry. The poller re-reads a rotated API key
   without a redeploy, raises when the key stays refused, and never follows a redirect.
 

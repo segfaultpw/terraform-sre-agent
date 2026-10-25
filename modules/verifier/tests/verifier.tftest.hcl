@@ -59,16 +59,9 @@ override_data {
 }
 
 override_data {
-  target = data.aws_iam_policy_document.ecs_tasks_assume
+  target = data.aws_caller_identity.current
   values = {
-    json = "{\"Version\":\"2012-10-17\",\"Statement\":[]}"
-  }
-}
-
-override_data {
-  target = data.aws_iam_policy_document.lambda_assume
-  values = {
-    json = "{\"Version\":\"2012-10-17\",\"Statement\":[]}"
+    account_id = "123456789012"
   }
 }
 
@@ -108,16 +101,21 @@ run "the_code_runs_with_a_role_that_has_no_permissions" {
   command = apply
 
   # The execution role pulls the image and writes logs. The task role, which the repository's
-  # code runs as, is a role with nothing attached: this module wires exactly one policy
-  # attachment (to the execution role) and one inline policy (to the poller).
+  # code runs as, is a role with nothing attached: this module wires exactly one inline policy
+  # to the execution role and one to the poller, and no managed policy to anything.
   assert {
-    condition     = aws_iam_role_policy_attachment.execution.role == aws_iam_role.execution.name
-    error_message = "the only managed policy goes to the execution role"
+    condition     = aws_iam_role_policy.execution.role == aws_iam_role.execution.id
+    error_message = "the execution role's policy is the module's own inline one"
+  }
+
+  assert {
+    condition     = length(aws_iam_role.execution.managed_policy_arns) == 0
+    error_message = "no AWS managed policy (they are granted on every resource) on the execution role"
   }
 
   assert {
     condition     = aws_iam_role_policy.poller.role == aws_iam_role.poller.id
-    error_message = "the only inline policy goes to the poller"
+    error_message = "the only other inline policy goes to the poller"
   }
 
   assert {
@@ -140,6 +138,88 @@ run "the_code_runs_with_a_role_that_has_no_permissions" {
   assert {
     condition     = aws_iam_role.task.permissions_boundary == null
     error_message = "the task role is not given a boundary that a later edit could widen"
+  }
+}
+
+run "the_execution_role_writes_the_task_logs_and_nothing_else" {
+  command = apply
+
+  assert {
+    condition = toset(flatten([
+      for s in jsondecode(aws_iam_role_policy.execution.policy).Statement : s.Action
+    ])) == toset(["logs:CreateLogStream", "logs:PutLogEvents"])
+    error_message = "without a private ECR repository the execution role only writes its log stream (ghcr.io needs no AWS permission)"
+  }
+
+  assert {
+    condition = alltrue([
+      for s in jsondecode(aws_iam_role_policy.execution.policy).Statement :
+      flatten([s.Resource]) == ["${aws_cloudwatch_log_group.tasks.arn}:*"]
+    ])
+    error_message = "the task log group only, not every log group"
+  }
+}
+
+run "private_ecr_repositories_are_read_only_when_named" {
+  command = apply
+
+  variables {
+    ecr_repository_arns = ["arn:aws:ecr:us-east-1:123456789012:repository/verifier-node"]
+  }
+
+  assert {
+    condition = toset(flatten([
+      for s in jsondecode(aws_iam_role_policy.execution.policy).Statement : s.Action
+      ])) == toset([
+      "logs:CreateLogStream", "logs:PutLogEvents", "ecr:GetAuthorizationToken",
+      "ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer", "ecr:BatchCheckLayerAvailability",
+    ])
+    error_message = "pull actions only, on the named repositories"
+  }
+
+  assert {
+    condition = [
+      for s in jsondecode(aws_iam_role_policy.execution.policy).Statement : s.Resource if contains(flatten([s.Action]), "ecr:BatchGetImage")
+    ][0] == ["arn:aws:ecr:us-east-1:123456789012:repository/verifier-node"]
+    error_message = "the pull actions are on the named repositories, not on every repository"
+  }
+}
+
+run "an_ecr_repository_entry_that_is_not_an_arn_is_refused" {
+  command = plan
+
+  variables {
+    ecr_repository_arns = ["*"]
+  }
+
+  expect_failures = [var.ecr_repository_arns]
+}
+
+run "the_ecs_roles_trust_ecs_tasks_of_this_account_only" {
+  command = apply
+
+  assert {
+    condition = alltrue([
+      for role in [aws_iam_role.execution, aws_iam_role.task] :
+      jsondecode(role.assume_role_policy).Statement[0].Principal.Service == "ecs-tasks.amazonaws.com"
+    ])
+    error_message = "the two ECS roles are assumed by ECS tasks"
+  }
+
+  assert {
+    condition = alltrue([
+      for role in [aws_iam_role.execution, aws_iam_role.task] :
+      jsondecode(role.assume_role_policy).Statement[0].Condition == {
+        StringEquals = { "aws:SourceAccount" = "123456789012" }
+        ArnLike      = { "aws:SourceArn" = "arn:aws:ecs:us-east-1:123456789012:*" }
+      }
+    ])
+    error_message = "confused-deputy conditions: this account, and ECS in this account and Region"
+  }
+
+  assert {
+    condition     = jsondecode(aws_iam_role.poller.assume_role_policy).Statement[0].Principal.Service == "lambda.amazonaws.com"
+    error_message = "the poller role is assumed by Lambda"
   }
 }
 
@@ -194,13 +274,45 @@ run "a_customer_managed_key_adds_decrypt_on_that_key_only" {
     ][0] == "arn:aws:kms:us-east-1:123456789012:key/11111111-2222-3333-4444-555555555555"
     error_message = "kms:Decrypt on the one key"
   }
+
+  assert {
+    condition = [
+      for s in jsondecode(aws_iam_role_policy.poller.policy).Statement : s.Condition if s.Sid == "DecryptTheApiKey"
+      ][0] == {
+      StringEquals = {
+        "kms:ViaService"                  = "secretsmanager.us-east-1.amazonaws.com"
+        "kms:EncryptionContext:SecretARN" = "arn:aws:secretsmanager:us-east-1:123456789012:secret:sre-agent-verifier-key-AbCdEf"
+      }
+    }
+    error_message = "the key decrypts only through Secrets Manager and only for the one secret"
+  }
+}
+
+run "a_kms_key_that_is_not_a_key_arn_is_refused" {
+  command = plan
+
+  variables {
+    api_key_kms_key_arn = "alias/aws/secretsmanager"
+  }
+
+  expect_failures = [var.api_key_kms_key_arn]
+}
+
+run "a_kms_alias_arn_is_refused_because_iam_needs_the_key" {
+  command = plan
+
+  variables {
+    api_key_kms_key_arn = "arn:aws:kms:us-east-1:123456789012:alias/mine"
+  }
+
+  expect_failures = [var.api_key_kms_key_arn]
 }
 
 run "the_network_has_no_inbound_and_https_out" {
   command = apply
 
   assert {
-    condition     = alltrue([for rule in values(aws_vpc_security_group_egress_rule.https) : rule.from_port == 443 && rule.to_port == 443 && rule.ip_protocol == "tcp"])
+    condition     = aws_vpc_security_group_egress_rule.https.from_port == 443 && aws_vpc_security_group_egress_rule.https.to_port == 443 && aws_vpc_security_group_egress_rule.https.ip_protocol == "tcp"
     error_message = "outbound HTTPS only"
   }
 
@@ -215,25 +327,47 @@ run "the_network_has_no_inbound_and_https_out" {
   }
 }
 
-run "egress_can_be_narrowed_to_a_proxy" {
+# Fargate pulls the image and ships the logs through the task's own network interface and ignores
+# HTTPS_PROXY, so the group must always reach the registry and CloudWatch Logs: egress is the
+# internet on 443 and is not a variable (narrowing it to a proxy's address stopped every task).
+run "egress_is_https_to_anywhere_and_nothing_else" {
+  command = apply
+
+  assert {
+    condition     = aws_vpc_security_group_egress_rule.https.cidr_ipv4 == "0.0.0.0/0"
+    error_message = "the image pull and the log delivery need the internet"
+  }
+
+  assert {
+    condition     = aws_vpc_security_group_egress_rule.https.from_port == 443 && aws_vpc_security_group_egress_rule.https.to_port == 443 && aws_vpc_security_group_egress_rule.https.ip_protocol == "tcp"
+    error_message = "443 only"
+  }
+
+  assert {
+    condition     = jsondecode(aws_ecs_task_definition.verifier["node"].container_definitions)[0].environment == []
+    error_message = "no proxy variables unless a proxy is given"
+  }
+}
+
+run "a_proxy_reaches_the_commands_the_runner_runs" {
   command = apply
 
   variables {
-    egress_cidrs = ["10.9.0.0/28"]
-    https_proxy  = "http://proxy.internal:3128"
+    https_proxy = "https://proxy.internal:443"
   }
 
   assert {
-    condition     = toset(keys(aws_vpc_security_group_egress_rule.https)) == toset(["10.9.0.0/28"])
-    error_message = "only the proxy is reachable"
-  }
-
-  assert {
-    condition = contains(
-      [for e in jsondecode(aws_ecs_task_definition.verifier["node"].container_definitions)[0].environment : e.name],
-      "HTTPS_PROXY"
-    )
+    condition = toset([
+      for e in jsondecode(aws_ecs_task_definition.verifier["node"].container_definitions)[0].environment : e.name
+    ]) == toset(["HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY"])
     error_message = "the proxy reaches the commands the runner runs"
+  }
+
+  assert {
+    condition = [
+      for e in jsondecode(aws_ecs_task_definition.verifier["node"].container_definitions)[0].environment : e.value if e.name == "NO_PROXY"
+    ][0] == "localhost,127.0.0.1,::1"
+    error_message = "loopback in both families is never sent to the proxy"
   }
 }
 
@@ -349,8 +483,13 @@ run "no_alarm_is_built_without_somewhere_to_send_it" {
   command = apply
 
   assert {
-    condition     = length(aws_cloudwatch_metric_alarm.poller_errors) == 0
+    condition     = length(aws_cloudwatch_metric_alarm.poller_errors) == 0 && length(aws_cloudwatch_metric_alarm.poller_error_lines) == 0
     error_message = "alarm_actions defaults to none"
+  }
+
+  assert {
+    condition     = length(aws_cloudwatch_log_metric_filter.poller_error_lines) == 0
+    error_message = "no metric is published when nobody is notified"
   }
 }
 
@@ -382,6 +521,53 @@ run "poller_errors_alarm_when_given_actions" {
   }
 }
 
+# The poller logs a 426 (an image to upgrade, a poller too old), a refused RunTask and a missing
+# task definition at level error and returns normally, so Lambda's Errors never counts them.
+# test_log_filter.py pins the pattern to what poller.py prints.
+run "the_error_lines_the_poller_logs_without_raising_have_their_own_alarm" {
+  command = apply
+
+  variables {
+    alarm_actions = ["arn:aws:sns:us-east-1:123456789012:oncall"]
+  }
+
+  assert {
+    condition     = aws_cloudwatch_log_metric_filter.poller_error_lines[0].pattern == "{ $.level = \"error\" }"
+    error_message = "the filter matches the poller's level=error JSON lines"
+  }
+
+  assert {
+    condition     = aws_cloudwatch_log_metric_filter.poller_error_lines[0].log_group_name == aws_cloudwatch_log_group.poller.name
+    error_message = "the filter reads the poller's log group"
+  }
+
+  assert {
+    condition     = aws_cloudwatch_metric_alarm.poller_error_lines[0].metric_name == aws_cloudwatch_log_metric_filter.poller_error_lines[0].metric_transformation[0].name && aws_cloudwatch_metric_alarm.poller_error_lines[0].namespace == aws_cloudwatch_log_metric_filter.poller_error_lines[0].metric_transformation[0].namespace
+    error_message = "the alarm watches the filter's metric"
+  }
+
+  assert {
+    condition     = aws_cloudwatch_metric_alarm.poller_error_lines[0].alarm_actions == toset(["arn:aws:sns:us-east-1:123456789012:oncall"])
+    error_message = "the same actions as the Errors alarm"
+  }
+
+  assert {
+    condition     = aws_cloudwatch_metric_alarm.poller_error_lines[0].treat_missing_data == "notBreaching"
+    error_message = "no error line is no problem"
+  }
+}
+
+run "the_poller_timeout_covers_its_worst_path" {
+  command = apply
+
+  # A refused key costs two polls of up to 20 s each, a secret read between them and a RunTask:
+  # a timeout that ends the invocation after a job was handed out loses that job.
+  assert {
+    condition     = aws_lambda_function.poller.timeout == 60
+    error_message = "60 seconds: two 20 s polls, the secret read and the RunTask"
+  }
+}
+
 run "more_than_three_zones_are_refused" {
   command = plan
 
@@ -402,26 +588,6 @@ run "an_empty_zone_list_is_refused" {
   expect_failures = [var.availability_zones]
 }
 
-run "an_egress_entry_that_is_not_a_cidr_is_refused" {
-  command = plan
-
-  variables {
-    egress_cidrs = ["0.0.0.0/0", "everywhere"]
-  }
-
-  expect_failures = [var.egress_cidrs]
-}
-
-run "no_egress_at_all_is_refused" {
-  command = plan
-
-  variables {
-    egress_cidrs = []
-  }
-
-  expect_failures = [var.egress_cidrs]
-}
-
 run "the_key_comes_from_a_secret_not_from_state" {
   command = plan
 
@@ -430,4 +596,142 @@ run "the_key_comes_from_a_secret_not_from_state" {
   }
 
   expect_failures = [var.api_key_secret_arn]
+}
+
+run "a_partial_secret_arn_is_refused" {
+  command = plan
+
+  variables {
+    api_key_secret_arn = "arn:aws:secretsmanager:us-east-1:123456789012:secret:sre-agent-verifier-key"
+  }
+
+  expect_failures = [var.api_key_secret_arn]
+}
+
+run "a_secret_in_another_region_is_refused" {
+  command = plan
+
+  variables {
+    api_key_secret_arn = "arn:aws:secretsmanager:eu-west-1:123456789012:secret:sre-agent-verifier-key-AbCdEf"
+  }
+
+  expect_failures = [aws_lambda_function.poller]
+}
+
+run "a_poll_schedule_the_platform_would_call_stale_is_refused" {
+  command = plan
+
+  variables {
+    poll_schedule_expression = "rate(10 minutes)"
+  }
+
+  expect_failures = [var.poll_schedule_expression]
+}
+
+run "an_hourly_poll_schedule_is_refused" {
+  command = plan
+
+  variables {
+    poll_schedule_expression = "rate(1 hour)"
+  }
+
+  expect_failures = [var.poll_schedule_expression]
+}
+
+run "a_cron_poll_schedule_is_refused_because_its_interval_cannot_be_checked" {
+  command = plan
+
+  variables {
+    poll_schedule_expression = "cron(0/10 * * * ? *)"
+  }
+
+  expect_failures = [var.poll_schedule_expression]
+}
+
+run "a_five_minute_poll_schedule_is_the_slowest_accepted" {
+  command = apply
+
+  variables {
+    poll_schedule_expression = "rate(5 minutes)"
+  }
+
+  assert {
+    condition     = aws_cloudwatch_event_rule.poll.schedule_expression == "rate(5 minutes)"
+    error_message = "the platform treats a poller as alive for 5 minutes"
+  }
+}
+
+run "a_retention_cloudwatch_does_not_offer_is_refused" {
+  command = plan
+
+  variables {
+    log_retention_days = 45
+  }
+
+  expect_failures = [var.log_retention_days]
+}
+
+run "a_retention_cloudwatch_offers_reaches_both_log_groups" {
+  command = apply
+
+  variables {
+    log_retention_days = 90
+  }
+
+  assert {
+    condition     = aws_cloudwatch_log_group.tasks.retention_in_days == 90 && aws_cloudwatch_log_group.poller.retention_in_days == 90
+    error_message = "both log groups"
+  }
+}
+
+run "a_vpc_cidr_without_a_prefix_is_refused_with_the_message" {
+  command = plan
+
+  variables {
+    vpc_cidr = "10.0.0.0"
+  }
+
+  expect_failures = [var.vpc_cidr]
+}
+
+run "a_vpc_cidr_larger_than_aws_allows_is_refused" {
+  command = plan
+
+  variables {
+    vpc_cidr = "10.0.0.0/15"
+  }
+
+  expect_failures = [var.vpc_cidr]
+}
+
+run "log_groups_use_the_default_encryption_unless_a_key_is_given" {
+  command = apply
+
+  assert {
+    condition     = aws_cloudwatch_log_group.tasks.kms_key_id == null && aws_cloudwatch_log_group.poller.kms_key_id == null
+    error_message = "no key, no override"
+  }
+}
+
+run "a_customer_managed_key_encrypts_both_log_groups" {
+  command = apply
+
+  variables {
+    log_kms_key_arn = "arn:aws:kms:us-east-1:123456789012:key/11111111-2222-3333-4444-555555555555"
+  }
+
+  assert {
+    condition     = aws_cloudwatch_log_group.tasks.kms_key_id == "arn:aws:kms:us-east-1:123456789012:key/11111111-2222-3333-4444-555555555555" && aws_cloudwatch_log_group.poller.kms_key_id == "arn:aws:kms:us-east-1:123456789012:key/11111111-2222-3333-4444-555555555555"
+    error_message = "test output from customer repositories lands in the task log group"
+  }
+}
+
+run "a_log_key_that_is_not_a_key_arn_is_refused" {
+  command = plan
+
+  variables {
+    log_kms_key_arn = "my-key"
+  }
+
+  expect_failures = [var.log_kms_key_arn]
 }

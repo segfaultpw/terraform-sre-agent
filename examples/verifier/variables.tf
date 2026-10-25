@@ -11,7 +11,7 @@ variable "sre_agent_url" {
 
 variable "api_key_secret_arn" {
   type        = string
-  description = "The Secrets Manager secret that holds the verifier:poll API key."
+  description = "The full ARN, with its six-character suffix, of the Secrets Manager secret that holds the verifier:poll API key (the plain key as the value), in the Region above."
 }
 
 variable "images" {

@@ -17,9 +17,13 @@
  *     permissions at all.
  *
  * The poller only dispatches, so the 15-minute Lambda limit never applies to a run: a run is
- * a Fargate task. The network gives the tasks outbound HTTPS and nothing inbound; see
- * `egress_cidrs` to narrow where they may connect.
+ * a Fargate task. The network gives the tasks outbound HTTPS to anywhere and nothing inbound.
+ * It is your network: SRE Agent's per-repository network setting is not enforced on it.
  */
+
+data "aws_partition" "current" {}
+
+data "aws_caller_identity" "current" {}
 
 data "aws_availability_zones" "available" {
   count = var.availability_zones == null ? 1 : 0
@@ -27,6 +31,10 @@ data "aws_availability_zones" "available" {
 }
 
 locals {
+  account_id = data.aws_caller_identity.current.account_id
+  partition  = data.aws_partition.current.partition
+  region     = element(split(":", aws_ecs_cluster.this.arn), 3)
+
   azs = var.availability_zones != null ? var.availability_zones : slice(data.aws_availability_zones.available[0].names, 0, 2)
 
   tags = merge({ ManagedBy = "terraform", Purpose = "sre-agent-verifier" }, var.tags)
@@ -39,6 +47,40 @@ locals {
   ]
 
   container_name = "verifier"
+
+  # Worst path of one invocation: a refused key costs two polls of up to 20 s each (the
+  # poller's socket timeout) with a secret read between them, and a job then adds a RunTask.
+  # An invocation cut off after a job was handed out loses that job until it expires.
+  poller_timeout_seconds = 60
+
+  # ECS tasks are the principal whose assumption AWS documents the confused-deputy keys for.
+  # Lambda's execution-role assumption carries no documented source keys, and a condition on a
+  # key AWS does not send would make the role impossible to assume, so that role has none.
+  ecs_tasks_assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect    = "Allow"
+        Action    = "sts:AssumeRole"
+        Principal = { Service = "ecs-tasks.amazonaws.com" }
+        Condition = {
+          StringEquals = { "aws:SourceAccount" = local.account_id }
+          ArnLike      = { "aws:SourceArn" = "arn:${local.partition}:ecs:${local.region}:${local.account_id}:*" }
+        }
+      },
+    ]
+  })
+
+  lambda_assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect    = "Allow"
+        Action    = "sts:AssumeRole"
+        Principal = { Service = "lambda.amazonaws.com" }
+      },
+    ]
+  })
 }
 
 ## Network: one public subnet for the NAT gateway, one private subnet per zone for the tasks.
@@ -126,6 +168,11 @@ resource "aws_route_table_association" "private" {
 }
 
 # No inbound at all; outbound HTTPS only. Untrusted repository code runs here.
+# The destination is the whole internet and is not a variable. On Fargate the image pull and the
+# awslogs delivery leave through the task's own network interface and ignore HTTPS_PROXY, so a
+# group narrowed to a proxy's address cannot pull its image or write its logs, and every task
+# fails to start. A customer who needs named-domain egress puts a transparent firewall in the
+# NAT path of their own network instead.
 resource "aws_security_group" "tasks" {
   name        = "${var.name_prefix}-tasks"
   description = "Verifier tasks: no inbound, outbound HTTPS only"
@@ -135,14 +182,12 @@ resource "aws_security_group" "tasks" {
 }
 
 resource "aws_vpc_security_group_egress_rule" "https" {
-  for_each = toset(var.egress_cidrs)
-
   security_group_id = aws_security_group.tasks.id
-  description       = "HTTPS to ${each.value}"
+  description       = "HTTPS to anywhere: the image pull, the logs, the clone and the package registries"
   ip_protocol       = "tcp"
   from_port         = 443
   to_port           = 443
-  cidr_ipv4         = each.value
+  cidr_ipv4         = "0.0.0.0/0"
 }
 
 ## The cluster, the logs and the roles.
@@ -156,42 +201,62 @@ resource "aws_ecs_cluster" "this" {
 resource "aws_cloudwatch_log_group" "tasks" {
   name              = "/ecs/${var.name_prefix}"
   retention_in_days = var.log_retention_days
+  kms_key_id        = var.log_kms_key_arn
 
   tags = local.tags
-}
-
-data "aws_iam_policy_document" "ecs_tasks_assume" {
-  statement {
-    actions = ["sts:AssumeRole"]
-
-    principals {
-      type        = "Service"
-      identifiers = ["ecs-tasks.amazonaws.com"]
-    }
-  }
 }
 
 # Pulls the image and writes the task's logs. Not available to the code that runs in the task.
 resource "aws_iam_role" "execution" {
   name               = "${var.name_prefix}-execution"
-  assume_role_policy = data.aws_iam_policy_document.ecs_tasks_assume.json
+  assume_role_policy = local.ecs_tasks_assume_role_policy
 
   tags = local.tags
 }
 
-resource "aws_iam_role_policy_attachment" "execution" {
-  role       = aws_iam_role.execution.name
-  policy_arn = "arn:${data.aws_partition.current.partition}:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
-}
+# Not the AWS managed task execution policy: it is granted on every log group and every ECR
+# repository. The default images are on ghcr.io and need no AWS permission to pull, so the role
+# writes its own log stream and, only when ecr_repository_arns names repositories, pulls from them.
+resource "aws_iam_role_policy" "execution" {
+  name = "write-task-logs"
+  role = aws_iam_role.execution.id
 
-data "aws_partition" "current" {}
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = concat(
+      [
+        {
+          Sid      = "WriteTheTaskLogs"
+          Effect   = "Allow"
+          Action   = ["logs:CreateLogStream", "logs:PutLogEvents"]
+          Resource = ["${aws_cloudwatch_log_group.tasks.arn}:*"]
+        },
+      ],
+      length(var.ecr_repository_arns) == 0 ? [] : [
+        {
+          # GetAuthorizationToken does not support resource-level permissions.
+          Sid      = "GetAnEcrLoginToken"
+          Effect   = "Allow"
+          Action   = ["ecr:GetAuthorizationToken"]
+          Resource = ["*"]
+        },
+        {
+          Sid      = "PullFromTheNamedRepositories"
+          Effect   = "Allow"
+          Action   = ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer", "ecr:BatchCheckLayerAvailability"]
+          Resource = var.ecr_repository_arns
+        },
+      ]
+    )
+  })
+}
 
 # The role the repository's own code runs as. It has NO permissions: no policy is attached to
 # it here and none should ever be, so a test, an install script or anything else running in the
 # task can call nothing in this account.
 resource "aws_iam_role" "task" {
   name               = "${var.name_prefix}-task"
-  assume_role_policy = data.aws_iam_policy_document.ecs_tasks_assume.json
+  assume_role_policy = local.ecs_tasks_assume_role_policy
 
   tags = local.tags
 }
@@ -230,7 +295,7 @@ resource "aws_ecs_task_definition" "verifier" {
         logDriver = "awslogs"
         options = {
           "awslogs-group"         = aws_cloudwatch_log_group.tasks.name
-          "awslogs-region"        = element(split(":", aws_ecs_cluster.this.arn), 3)
+          "awslogs-region"        = local.region
           "awslogs-stream-prefix" = each.key
         }
       }
@@ -251,24 +316,14 @@ data "archive_file" "poller" {
 resource "aws_cloudwatch_log_group" "poller" {
   name              = "/aws/lambda/${var.name_prefix}-poller"
   retention_in_days = var.log_retention_days
+  kms_key_id        = var.log_kms_key_arn
 
   tags = local.tags
 }
 
-data "aws_iam_policy_document" "lambda_assume" {
-  statement {
-    actions = ["sts:AssumeRole"]
-
-    principals {
-      type        = "Service"
-      identifiers = ["lambda.amazonaws.com"]
-    }
-  }
-}
-
 resource "aws_iam_role" "poller" {
   name               = "${var.name_prefix}-poller"
-  assume_role_policy = data.aws_iam_policy_document.lambda_assume.json
+  assume_role_policy = local.lambda_assume_role_policy
 
   tags = local.tags
 }
@@ -320,6 +375,12 @@ resource "aws_iam_role_policy" "poller" {
           Effect   = "Allow"
           Action   = ["kms:Decrypt"]
           Resource = var.api_key_kms_key_arn
+          Condition = {
+            StringEquals = {
+              "kms:ViaService"                  = "secretsmanager.${local.region}.amazonaws.com"
+              "kms:EncryptionContext:SecretARN" = var.api_key_secret_arn
+            }
+          }
         },
       ]
     )
@@ -333,7 +394,7 @@ resource "aws_lambda_function" "poller" {
   handler          = "poller.handler"
   filename         = data.archive_file.poller.output_path
   source_code_hash = data.archive_file.poller.output_base64sha256
-  timeout          = 30
+  timeout          = local.poller_timeout_seconds
   memory_size      = 128
 
   # No reservation unless asked for. Two polls that overlap are safe: SRE Agent hands a job out
@@ -357,6 +418,13 @@ resource "aws_lambda_function" "poller" {
 
   tags = local.tags
 
+  lifecycle {
+    precondition {
+      condition     = split(":", var.api_key_secret_arn)[3] == local.region
+      error_message = "api_key_secret_arn is in a different Region than the one this module deploys to. The poller reads the secret through its own Region's endpoint, so keep the secret in the same Region."
+    }
+  }
+
   depends_on = [aws_cloudwatch_log_group.poller, aws_iam_role_policy.poller]
 }
 
@@ -374,7 +442,7 @@ resource "aws_cloudwatch_metric_alarm" "poller_errors" {
   count = length(var.alarm_actions) > 0 ? 1 : 0
 
   alarm_name          = "${var.name_prefix}-poller-errors"
-  alarm_description   = "The verifier poller has failed for 15 minutes running: check its log group for the reason (a refused API key, an unreachable SRE Agent or an unreadable answer)."
+  alarm_description   = "The verifier poller has raised for 15 minutes running: check its log group for the reason (a refused API key, an unreachable SRE Agent or an unreadable answer)."
   namespace           = "AWS/Lambda"
   metric_name         = "Errors"
   statistic           = "Sum"
@@ -389,6 +457,48 @@ resource "aws_cloudwatch_metric_alarm" "poller_errors" {
   dimensions = {
     FunctionName = aws_lambda_function.poller.function_name
   }
+
+  tags = local.tags
+}
+
+# Lambda's Errors metric counts only invocations that raise. The poller logs a 426, a refused
+# RunTask and a missing task definition at level error as one JSON line and then returns, so
+# this filter on its log lines is what makes those visible. lambda/test_log_filter.py pins the
+# pattern to what poller.py prints.
+resource "aws_cloudwatch_log_metric_filter" "poller_error_lines" {
+  count = length(var.alarm_actions) > 0 ? 1 : 0
+
+  name           = "${var.name_prefix}-poller-error-lines"
+  log_group_name = aws_cloudwatch_log_group.poller.name
+  pattern        = "{ $.level = \"error\" }"
+
+  metric_transformation {
+    name      = "PollerErrorLines"
+    namespace = "${var.name_prefix}/poller"
+    value     = "1"
+    unit      = "Count"
+  }
+}
+
+# The failures that do not raise and so never reach the Errors alarm: SRE Agent refuses the
+# poller or an image (426: an image to upgrade, a poller too old), ECS refuses a RunTask, or a
+# job names a runtime with no task definition. A 426 repeats every minute until `images` is
+# changed and applied, and every pull request opens unverified meanwhile.
+resource "aws_cloudwatch_metric_alarm" "poller_error_lines" {
+  count = length(var.alarm_actions) > 0 ? 1 : 0
+
+  alarm_name          = "${var.name_prefix}-poller-error-lines"
+  alarm_description   = "The verifier poller has logged an error for 15 minutes running without failing: SRE Agent is refusing the poller or one of its images (a 426 that names what to move to) or ECS refused a task. Read the poller log group; nothing is verified until it is fixed."
+  namespace           = aws_cloudwatch_log_metric_filter.poller_error_lines[0].metric_transformation[0].namespace
+  metric_name         = aws_cloudwatch_log_metric_filter.poller_error_lines[0].metric_transformation[0].name
+  statistic           = "Sum"
+  period              = 300
+  evaluation_periods  = 3
+  datapoints_to_alarm = 3
+  threshold           = 1
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = var.alarm_actions
 
   tags = local.tags
 }
