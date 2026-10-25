@@ -99,9 +99,9 @@ they match `runner_images.json` in SRE Agent):
 | `java` | `ghcr.io/segfaultpw/sre-agent-verifier-java@sha256:20e28b6261c05d2ff7d64e092b9c025c9d17ef20c7808003cf22c222885abfc4` |
 | `php` | `ghcr.io/segfaultpw/sre-agent-verifier-php@sha256:313b8acbda0a4b61e4dd7f7e06a01146b7efd70de7a843faf3a4adf01b35bebe` |
 
-This table is a snapshot. The Integrations card shows which images SRE Agent accepts now, and a
-digest it refuses is answered (HTTP 426 to the poller, logged by it) with a sentence that names
-what to move to. List only the runtimes your repositories use.
+This table is a snapshot. The Integrations card shows the digests your poller reports and, when
+SRE Agent refuses one, the sentence it answered with (HTTP 426 to the poller, logged by it), which
+names what to move to. List only the runtimes your repositories use.
 
 ## What it builds
 
@@ -164,7 +164,7 @@ hosted sandbox (`409 hosted_mode`), are logged as warnings.
 |---|---|---|
 | `poller_reserved_concurrency` | `null` | Reserved concurrency for the poller. Null reserves nothing. Overlapping polls are safe, because SRE Agent hands a job out with one conditional write, so the second of two simultaneous polls is given nothing and starts nothing. A reservation fails to apply on an account whose total Lambda concurrency is still the new-account limit of 10 (AWS will not let unreserved concurrency fall below 10), so set it only to cap a busy account. |
 | `alarm_actions` | `[]` | ARNs (an SNS topic) to notify. Builds the `Errors` alarm, the error-line metric filter and its alarm. With none, nothing is built and the failures only show in the log group. |
-| `poll_schedule_expression` | `rate(1 minute)` | `rate(1 minute)` to `rate(5 minutes)` only. SRE Agent routes nothing to a poller it has not heard from in 5 minutes, so a slower schedule opens every pull request unverified. |
+| `poll_schedule_expression` | `rate(1 minute)` | `rate(1 minute)` to `rate(4 minutes)` only. SRE Agent routes nothing to a poller it has not heard from in 5 minutes, so a slower schedule opens every pull request unverified, and `rate(5 minutes)` would sit on that bound. |
 | `log_retention_days` | `30` | A value CloudWatch Logs offers. |
 | `log_kms_key_arn` | `null` | A customer-managed KMS key for both log groups; test output from your repositories lands in the task log group. The key policy must allow the CloudWatch Logs service of the Region. |
 | `ecr_repository_arns` | `[]` | Private ECR repositories to pull from when you mirror the images (keep the multi-arch index, for example `skopeo copy --all`, so the digest the poller reports is unchanged). Empty gives the execution role no ECR permission. |

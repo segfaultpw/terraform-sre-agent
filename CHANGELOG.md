@@ -43,8 +43,8 @@ off.
   ECR permission by default) and validation of `availability_zones` (one to three),
   `api_key_secret_arn` (the full ARN with its suffix, in the deployment Region),
   `api_key_kms_key_arn` (a key ARN; the grant is limited to Secrets Manager and the one secret),
-  `poll_schedule_expression` (`rate(1 minute)` to `rate(5 minutes)`, because SRE Agent treats a
-  poller silent for 5 minutes as gone), `log_retention_days` (a value CloudWatch offers) and
+  `poll_schedule_expression` (`rate(1 minute)` to `rate(4 minutes)`, because SRE Agent treats a
+  poller silent for 5 minutes as gone and 5 would sit on that bound), `log_retention_days` (a value CloudWatch offers) and
   `vpc_cidr` (/16 to /24). `no_proxy` defaults to `localhost,127.0.0.1,::1`. The execution role has
   an inline policy for its own log stream instead of the AWS managed policy, the two ECS roles
   trust ECS tasks of the account only, and the poller's timeout is 60 seconds. A failed poll is not

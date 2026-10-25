@@ -648,17 +648,27 @@ run "a_cron_poll_schedule_is_refused_because_its_interval_cannot_be_checked" {
   expect_failures = [var.poll_schedule_expression]
 }
 
-run "a_five_minute_poll_schedule_is_the_slowest_accepted" {
+run "a_four_minute_poll_schedule_is_the_slowest_accepted" {
   command = apply
+
+  variables {
+    poll_schedule_expression = "rate(4 minutes)"
+  }
+
+  assert {
+    condition     = aws_cloudwatch_event_rule.poll.schedule_expression == "rate(4 minutes)"
+    error_message = "the platform treats a poller as alive for 5 minutes, so 4 is the slowest with slack"
+  }
+}
+
+run "a_five_minute_poll_schedule_sits_on_the_bound_and_is_refused" {
+  command = plan
 
   variables {
     poll_schedule_expression = "rate(5 minutes)"
   }
 
-  assert {
-    condition     = aws_cloudwatch_event_rule.poll.schedule_expression == "rate(5 minutes)"
-    error_message = "the platform treats a poller as alive for 5 minutes"
-  }
+  expect_failures = [var.poll_schedule_expression]
 }
 
 run "a_retention_cloudwatch_does_not_offer_is_refused" {

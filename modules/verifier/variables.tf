@@ -197,17 +197,18 @@ variable "log_retention_days" {
 variable "poll_schedule_expression" {
   type        = string
   description = <<-EOT
-    How often the poller asks for work: rate(1 minute) up to rate(5 minutes). SRE Agent routes
+    How often the poller asks for work: rate(1 minute) up to rate(4 minutes). SRE Agent routes
     nothing to a poller it has not heard from in 5 minutes, so a slower schedule makes every pull
-    request open unverified; rate(5 minutes) leaves no slack and is the slowest accepted. A job
+    request open unverified; rate(5 minutes) would sit exactly on that bound and flap between
+    alive and gone, so rate(4 minutes) is the slowest accepted. A job
     waits up to 15 minutes to be collected, and every poll is also what shows the poller as alive
     in Integrations. A cron expression is not accepted, because its interval cannot be checked.
   EOT
   default     = "rate(1 minute)"
 
   validation {
-    condition     = can(regex("^rate\\((1 minute|[2-5] minutes)\\)$", var.poll_schedule_expression))
-    error_message = "poll_schedule_expression must be rate(1 minute) or rate(N minutes) with N from 2 to 5: SRE Agent treats a poller it has not heard from in 5 minutes as gone."
+    condition     = can(regex("^rate\\((1 minute|[2-4] minutes)\\)$", var.poll_schedule_expression))
+    error_message = "poll_schedule_expression must be rate(1 minute) or rate(N minutes) with N from 2 to 4: SRE Agent treats a poller it has not heard from in 5 minutes as gone, and 5 minutes would sit on that bound."
   }
 }
 
