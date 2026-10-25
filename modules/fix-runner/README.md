@@ -65,10 +65,10 @@ The self-hosted fix runner is a plan feature (`self_hosted_fix_runner`).
    except when the secret's own name ends in a hyphen and six letters or digits (a secret called
    `sre-fix-runner-github`): the module cannot tell such a name from a real suffix, so copy the ARN
    from `create-secret` or `describe-secret`, never build it from the name.
-3. Apply the module. The image is **required**: there is no default yet, and a tag is refused. Pin
-   the digest of the `sre-agent-opencode` release you want (from its package page on GHCR). Use a
-   release whose README documents `SRE_MEMORY_BUCKET` and `SRE_MEMORY_PREFIX`; an older image
-   ignores them, and the notes then stay on the volume without the bucket mirror.
+3. Apply the module. The image defaults to the `sre-agent-opencode` v1.5.0 runner pinned by its
+   multi-architecture digest (`ghcr.io/segfaultpw/sre-agent-opencode-runner@sha256:ef95a56a8ae2763e7c9b1a98e261443a4489ca78ba449d47331f3d7a163b1b52`), and `image` replaces it with another digest; a tag is
+   refused. An image older than v1.5.0 ignores `SRE_MEMORY_BUCKET` and `SRE_MEMORY_PREFIX`, and the
+   notes then stay on the volume without the bucket mirror.
 
 ```hcl
 data "aws_secretsmanager_secret" "api_key" { name = "sre-fix-runner-key" }
@@ -80,7 +80,6 @@ module "sre_agent_fix_runner" {
 
   sre_agent_url = "https://sre.example.com"
   sre_model     = "openrouter/deepseek/deepseek-v4-pro"
-  image         = "ghcr.io/segfaultpw/sre-agent-opencode-runner@sha256:<64 hex digits of the release>"
 
   api_key_secret_arn      = data.aws_secretsmanager_secret.api_key.arn
   github_token_secret_arn = data.aws_secretsmanager_secret.github.arn
@@ -332,7 +331,7 @@ as root at the next start.
 |---|---|---|
 | `sre_agent_url` | required | Your SRE Agent origin, an https URL with no path. Becomes `SRE_SERVER_URL`. |
 | `sre_model` | required | `provider/model`, for example `openrouter/deepseek/deepseek-v4-pro`. Becomes `SRE_MODEL`. |
-| `image` | **required, no default yet** | The runner image pinned by digest. A tag is refused. The default will be the digest of the package release this module version was built against. |
+| `image` | the v1.5.0 runner, by digest | The runner image pinned by digest. A tag is refused; null keeps the default. |
 | `api_key_secret_arn` | required | Full ARN of the secret holding the `fix_runner:poll` API key. Becomes `SRE_API_KEY`. |
 | `github_token_secret_arn` | required | Full ARN of the secret holding the token the runner publishes with. Becomes `SRE_GITHUB_TOKEN`. |
 | `provider_key_secret_arns` | required | Environment variable name to the full ARN of the provider's key secret, for example `OPENROUTER_API_KEY`. For a provider the package maps, the key `sre_model` needs must be present. |

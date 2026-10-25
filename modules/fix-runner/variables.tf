@@ -41,15 +41,17 @@ variable "image" {
   description = <<-EOT
     The runner image, pinned by digest: ghcr.io/segfaultpw/sre-agent-opencode-runner@sha256:<64 hex>
     (a name:tag@sha256:... reference is accepted, and the digest decides). A tag is refused because
-    it can move under a service that has no one watching it. There is no default yet: the digest of
-    the package release this module version was built against is added to this variable when that
-    release exists, so for now it is required. Use the digest of the release you want, from
+    it can move under a service that has no one watching it. The default is the sre-agent-opencode
+    v1.5.0 runner this module version was built against (a multi-architecture index); null means
+    the default. Override it with the digest of another release, from
     https://github.com/segfaultpw/sre-agent-opencode/pkgs/container/sre-agent-opencode-runner, or of
     your own image derived from it (see "Adding what a repository needs" in the README).
   EOT
+  default     = "ghcr.io/segfaultpw/sre-agent-opencode-runner@sha256:ef95a56a8ae2763e7c9b1a98e261443a4489ca78ba449d47331f3d7a163b1b52"
+  nullable    = false
 
   validation {
-    condition     = var.image != null && can(regex("^[^@[:space:]]+@sha256:[0-9a-f]{64}$", var.image))
+    condition     = can(regex("^[^@[:space:]]+@sha256:[0-9a-f]{64}$", var.image))
     error_message = "image must be pinned by digest (name@sha256:<64 hex>). A tag can move, and this service restarts on its own."
   }
 }

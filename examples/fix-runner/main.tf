@@ -21,8 +21,8 @@
 #   3. Your model provider's API key.
 #
 # Then register the runner in SRE Agent (Integrations, Fix runner), pass the three secrets' full ARNs
-# (with their six-character suffixes) and an image digest from the sre-agent-opencode release you
-# want, and apply.
+# (with their six-character suffixes), and apply. The module runs the sre-agent-opencode v1.5.0
+# image by digest unless you pass another digest as image.
 
 terraform {
   required_version = ">= 1.5"

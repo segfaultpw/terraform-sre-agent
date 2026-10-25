@@ -16,7 +16,8 @@ variable "sre_model" {
 
 variable "image" {
   type        = string
-  description = "The runner image pinned by digest: ghcr.io/segfaultpw/sre-agent-opencode-runner@sha256:<digest>."
+  description = "A runner image pinned by digest, to replace the module's default (the v1.5.0 runner). Null keeps the default."
+  default     = null
 }
 
 variable "api_key_secret_arn" {

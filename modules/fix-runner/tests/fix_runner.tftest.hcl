@@ -235,14 +235,17 @@ run "a_short_digest_is_refused" {
   expect_failures = [var.image]
 }
 
-run "the_image_has_no_default" {
+run "the_default_image_is_the_v1_5_0_runner_by_digest" {
   command = plan
 
   variables {
     image = null
   }
 
-  expect_failures = [var.image]
+  assert {
+    condition     = jsondecode(aws_ecs_task_definition.this.container_definitions)[0].image == "ghcr.io/segfaultpw/sre-agent-opencode-runner@sha256:ef95a56a8ae2763e7c9b1a98e261443a4489ca78ba449d47331f3d7a163b1b52"
+    error_message = "null means the default, the v1.5.0 runner pinned by its multi-architecture digest"
+  }
 }
 
 run "the_runner_is_told_where_everything_is" {
