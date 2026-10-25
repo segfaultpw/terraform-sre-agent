@@ -171,8 +171,13 @@ variable "provider_key_secret_arns" {
   }
 
   validation {
-    condition     = alltrue([for name in keys(var.provider_key_secret_arns) : can(regex("^[A-Z][A-Z0-9_]*$", name)) && !startswith(name, "SRE_") && !startswith(name, "AWS_")])
-    error_message = "Every provider_key_secret_arns key must be an upper-case environment variable name that does not start with SRE_ or AWS_ (those are the runner's own and the task's own)."
+    condition = alltrue([
+      for name in keys(var.provider_key_secret_arns) :
+      can(regex("^[A-Z][A-Z0-9_]*$", name)) && !startswith(name, "SRE_") && !startswith(name, "AWS_")
+      && !contains(["PATH", "HOME", "ENV", "BASH_ENV", "NODE_OPTIONS", "NODE_PATH"], name)
+      && !startswith(name, "LD_") && !startswith(name, "GIT_") && !startswith(name, "OPENCODE_")
+    ])
+    error_message = "Every provider_key_secret_arns key must be an upper-case environment variable name that does not start with SRE_ or AWS_ (those are the runner's own and the task's own) and is not one of the names that move the boundary between the runner and the agent (PATH, HOME, ENV, BASH_ENV, NODE_OPTIONS, NODE_PATH, or any LD_*, GIT_* or OPENCODE_* name)."
   }
 
   validation {
@@ -242,8 +247,9 @@ variable "extra_environment" {
     derived image, SRE_RUN_TIMEOUT_SECONDS or SRE_LOG_LEVEL. They are stored in the task definition
     in clear text, so a value is never a credential: a name that looks like one (it contains KEY,
     TOKEN, SECRET, PASS, AUTH, PRIVATE, CREDENTIAL, DSN, DATABASE_URL or CONNECTION_STRING) is
-    refused, and so is any variable this module
-    sets itself or carries as a secret, and SRE_ONCE, which would make the runner exit after one poll.
+    refused, and so is any variable this module sets itself or carries as a secret, and SRE_ONCE,
+    which would make the runner exit after one poll. SRE_RUNNER_SETUP must be an absolute path in
+    the image, never under /workspace, which the agent can write.
     Also refused are the names that move the boundary between the runner and the agent: PATH, HOME,
     ENV, BASH_ENV, NODE_OPTIONS, NODE_PATH, SRE_RUNNER_USER, SRE_AGENT_USER, and any name that
     starts with LD_, GIT_ or OPENCODE_.
@@ -273,6 +279,11 @@ variable "extra_environment" {
       && !startswith(name, "LD_") && !startswith(name, "GIT_") && !startswith(name, "OPENCODE_")
     ])
     error_message = "extra_environment cannot set PATH, HOME, ENV, BASH_ENV, NODE_OPTIONS, NODE_PATH, SRE_RUNNER_USER, SRE_AGENT_USER or any LD_*, GIT_* or OPENCODE_* name: they change which programs the runner and its entrypoint run, who the runner and the agent are, or what the agent is configured with, and so move the boundary between them. Put tools on the image, and use SRE_RUNNER_SETUP for setup."
+  }
+
+  validation {
+    condition     = !contains(keys(var.extra_environment), "SRE_RUNNER_SETUP") ? true : startswith(var.extra_environment["SRE_RUNNER_SETUP"], "/") && !startswith(var.extra_environment["SRE_RUNNER_SETUP"], "/workspace/") && !can(regex("(^|/)\\.\\.(/|$)", var.extra_environment["SRE_RUNNER_SETUP"]))
+    error_message = "SRE_RUNNER_SETUP must be an absolute path in the image, never under /workspace: the volume is writable by the agent, and the entrypoint runs the script as root at the next start."
   }
 
   validation {

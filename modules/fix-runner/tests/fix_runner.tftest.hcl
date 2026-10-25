@@ -370,6 +370,11 @@ run "the_execution_role_reads_only_the_named_secrets" {
   }
 
   assert {
+    condition     = length(regexall("(?m)^resource \"(aws_iam_policy_attachment|aws_iam_role_policies_exclusive|aws_iam_role_policy_attachments_exclusive|aws_security_group_rule)\" ", file("${path.module}/main.tf"))) == 0
+    error_message = "no aws_iam_policy_attachment, exclusive attachment set or aws_security_group_rule: each reaches a role or a group without showing as one of the module's own rules"
+  }
+
+  assert {
     condition     = length(regexall("(?m)^resource \"aws_iam_role_policy\" ", file("${path.module}/main.tf"))) == 2 && length(regexall("(?m)^resource \"aws_iam_role_policy\" \"(execution|task)\" ", file("${path.module}/main.tf"))) == 2
     error_message = "the only inline policies are execution and task"
   }
@@ -1060,6 +1065,73 @@ run "extra_environment_refuses_app_connection_string" {
   }
 
   expect_failures = [var.extra_environment]
+}
+
+run "the_documented_runner_variables_are_accepted" {
+  command = plan
+
+  variables {
+    extra_environment = {
+      SRE_RUN_TIMEOUT_SECONDS = "2400"
+      SRE_LOG_LEVEL           = "debug"
+      SRE_RUNNER_SETUP        = "/opt/setup.sh"
+      SRE_SETUP_CHANNEL       = "stable"
+      HTTP_PROXY              = "http://proxy.example.internal:3128"
+      HTTPS_PROXY             = "http://proxy.example.internal:3128"
+      NO_PROXY                = "169.254.170.2,localhost"
+      http_proxy              = "http://proxy.example.internal:3128"
+      https_proxy             = "http://proxy.example.internal:3128"
+      no_proxy                = "169.254.170.2,localhost"
+    }
+  }
+
+  assert {
+    condition     = length(var.extra_environment) == 10
+    error_message = "every runner variable the package documents passes the module's refusals"
+  }
+}
+
+run "a_setup_script_on_the_volume_is_refused" {
+  command = plan
+
+  variables {
+    extra_environment = { SRE_RUNNER_SETUP = "/workspace/agent-home/setup.sh" }
+  }
+
+  expect_failures = [var.extra_environment]
+}
+
+run "a_relative_setup_script_is_refused" {
+  command = plan
+
+  variables {
+    extra_environment = { SRE_RUNNER_SETUP = "setup.sh" }
+  }
+
+  expect_failures = [var.extra_environment]
+}
+
+run "a_setup_script_that_climbs_out_is_refused" {
+  command = plan
+
+  variables {
+    extra_environment = { SRE_RUNNER_SETUP = "/opt/../workspace/setup.sh" }
+  }
+
+  expect_failures = [var.extra_environment]
+}
+
+run "a_provider_key_name_cannot_move_the_boundary" {
+  command = plan
+
+  variables {
+    provider_key_secret_arns = {
+      OPENROUTER_API_KEY = "arn:aws:secretsmanager:us-east-1:123456789012:secret:sre-fix-runner-openrouter-AbCdEf"
+      LD_PRELOAD         = "arn:aws:secretsmanager:us-east-1:123456789012:secret:sre-fix-runner-preload-AbCdEf"
+    }
+  }
+
+  expect_failures = [var.provider_key_secret_arns]
 }
 
 run "extra_environment_cannot_carry_any_secret_looking_name" {

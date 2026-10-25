@@ -758,7 +758,9 @@ resource "aws_ecs_task_definition" "this" {
     }
 
     precondition {
-      condition     = local.expected_provider_key == null || contains(keys(var.provider_key_secret_arns), local.expected_provider_key)
+      # A conditional, not ||: Terraform before 1.12 evaluates both sides of ||, and
+      # contains() with a null value raises instead of answering.
+      condition     = local.expected_provider_key == null ? true : contains(keys(var.provider_key_secret_arns), local.expected_provider_key)
       error_message = "sre_model ${var.sre_model} reads its key from ${coalesce(local.expected_provider_key, "its provider's variable")}, which provider_key_secret_arns does not hold. Add it, or the agent would call the model with no key."
     }
   }

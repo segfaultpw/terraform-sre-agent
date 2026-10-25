@@ -115,6 +115,10 @@ jobs:
             echo "::error::only the execution role and the task role have inline policies"
             exit 1
           fi
+          if grep -nE '^resource "(aws_iam_policy_attachment|aws_iam_role_policies_exclusive|aws_iam_role_policy_attachments_exclusive|aws_security_group_rule)"' "$f"; then
+            echo "::error::no aws_iam_policy_attachment, exclusive attachment set or aws_security_group_rule: each reaches a role or a group without showing as one of the module's rules"
+            exit 1
+          fi
           if [ "$(grep -cE '^resource "aws_vpc_security_group_egress_rule"' "$f")" != 3 ]; then
             echo "::error::three egress rules only: HTTPS, NFS to the volume, and extra_egress_ports"
             exit 1

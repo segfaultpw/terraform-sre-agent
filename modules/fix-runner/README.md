@@ -308,12 +308,16 @@ CLI, `kubectl` and `mise`). Three ways to add more, in the order to try them:
 
 `extra_environment` is stored in clear text in the task definition, so it never carries a
 credential: a name containing `KEY`, `TOKEN`, `SECRET`, `PASS`, `AUTH`, `PRIVATE`, `CREDENTIAL`,
-`DSN`, `DATABASE_URL` or `CONNECTION_STRING` is refused, and so is any variable this module sets itself or carries as a secret, and `SRE_ONCE`
-(the runner would exit after one poll and ECS would restart it in a loop). Also refused: `PATH`,
-`HOME`, `ENV`, `BASH_ENV`, `NODE_OPTIONS`, `NODE_PATH`, `SRE_RUNNER_USER`, `SRE_AGENT_USER` and any
-name starting with `LD_`, `GIT_` or `OPENCODE_`, because these move the boundary between the runner
-and the agent (which programs the root entrypoint and the runner run, who they run as, and what the
-agent is configured with). Put tools on the image, or install them from a setup script, instead.
+`DSN`, `DATABASE_URL` or `CONNECTION_STRING` is refused, and so is any variable this module sets
+itself or carries as a secret, and `SRE_ONCE` (the runner would exit after one poll and ECS would
+restart it in a loop). Also refused: `PATH`, `HOME`, `ENV`, `BASH_ENV`, `NODE_OPTIONS`,
+`NODE_PATH`, `SRE_RUNNER_USER`, `SRE_AGENT_USER` and any name starting with `LD_`, `GIT_` or
+`OPENCODE_`, because these move the boundary between the runner and the agent (which programs the
+root entrypoint and the runner run, who they run as, and what the agent is configured with); a
+`provider_key_secret_arns` key may not be one of them either. Put tools on the image, or install
+them from a setup script, instead. `SRE_RUNNER_SETUP` must be an absolute path in the image and
+never under `/workspace`, because the agent can write the volume and the entrypoint runs the script
+as root at the next start.
 
 ## Inputs
 
