@@ -241,7 +241,8 @@ variable "extra_environment" {
     Other runner variables, as plain values, for example SRE_RUNNER_SETUP for a script baked into a
     derived image, SRE_RUN_TIMEOUT_SECONDS or SRE_LOG_LEVEL. They are stored in the task definition
     in clear text, so a value is never a credential: a name that looks like one (it contains KEY,
-    TOKEN, SECRET, PASSWORD, PASSWD or CREDENTIAL) is refused, and so is any variable this module
+    TOKEN, SECRET, PASS, AUTH, PRIVATE, CREDENTIAL, DSN, DATABASE_URL or CONNECTION_STRING) is
+    refused, and so is any variable this module
     sets itself or carries as a secret, and SRE_ONCE, which would make the runner exit after one poll.
     Also refused are the names that move the boundary between the runner and the agent: PATH, HOME,
     ENV, BASH_ENV, NODE_OPTIONS, NODE_PATH, SRE_RUNNER_USER, SRE_AGENT_USER, and any name that
@@ -275,8 +276,8 @@ variable "extra_environment" {
   }
 
   validation {
-    condition     = alltrue([for name in keys(var.extra_environment) : !can(regex("(KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL)", upper(name)))])
-    error_message = "extra_environment is stored in clear text in the task definition, so it cannot carry a name that looks like a credential (KEY, TOKEN, SECRET, PASSWORD, PASSWD, CREDENTIAL). Provider keys go in provider_key_secret_arns."
+    condition     = alltrue([for name in keys(var.extra_environment) : !can(regex("(KEY|TOKEN|SECRET|PASS|AUTH|PRIVATE|CREDENTIAL|DSN|DATABASE_URL|CONNECTION_STRING)", upper(name)))])
+    error_message = "extra_environment is stored in clear text in the task definition, so it cannot carry a name that looks like a credential (KEY, TOKEN, SECRET, PASS, AUTH, PRIVATE, CREDENTIAL, DSN, DATABASE_URL, CONNECTION_STRING). Provider keys go in provider_key_secret_arns."
   }
 }
 

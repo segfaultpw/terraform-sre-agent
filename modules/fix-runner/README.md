@@ -307,8 +307,8 @@ CLI, `kubectl` and `mise`). Three ways to add more, in the order to try them:
 ```
 
 `extra_environment` is stored in clear text in the task definition, so it never carries a
-credential: a name containing `KEY`, `TOKEN`, `SECRET`, `PASSWORD`, `PASSWD` or `CREDENTIAL` is
-refused, and so is any variable this module sets itself or carries as a secret, and `SRE_ONCE`
+credential: a name containing `KEY`, `TOKEN`, `SECRET`, `PASS`, `AUTH`, `PRIVATE`, `CREDENTIAL`,
+`DSN`, `DATABASE_URL` or `CONNECTION_STRING` is refused, and so is any variable this module sets itself or carries as a secret, and `SRE_ONCE`
 (the runner would exit after one poll and ECS would restart it in a loop). Also refused: `PATH`,
 `HOME`, `ENV`, `BASH_ENV`, `NODE_OPTIONS`, `NODE_PATH`, `SRE_RUNNER_USER`, `SRE_AGENT_USER` and any
 name starting with `LD_`, `GIT_` or `OPENCODE_`, because these move the boundary between the runner

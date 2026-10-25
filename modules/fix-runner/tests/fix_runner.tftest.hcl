@@ -1002,6 +1002,66 @@ run "extra_environment_cannot_carry_a_provider_key" {
   expect_failures = [var.extra_environment]
 }
 
+run "extra_environment_refuses_registry_pass" {
+  command = plan
+
+  variables {
+    extra_environment = { REGISTRY_PASS = "the-password" }
+  }
+
+  expect_failures = [var.extra_environment]
+}
+
+run "extra_environment_refuses_basic_auth" {
+  command = plan
+
+  variables {
+    extra_environment = { BASIC_AUTH = "user:password" }
+  }
+
+  expect_failures = [var.extra_environment]
+}
+
+run "extra_environment_refuses_ssh_private" {
+  command = plan
+
+  variables {
+    extra_environment = { SSH_PRIVATE = "-----BEGIN" }
+  }
+
+  expect_failures = [var.extra_environment]
+}
+
+run "extra_environment_refuses_sentry_dsn" {
+  command = plan
+
+  variables {
+    extra_environment = { SENTRY_DSN = "https://key@sentry.example.com/1" }
+  }
+
+  expect_failures = [var.extra_environment]
+}
+
+run "extra_environment_refuses_database_url" {
+  command = plan
+
+  variables {
+    extra_environment = { DATABASE_URL = "postgres://user:password@db/app" }
+  }
+
+  expect_failures = [var.extra_environment]
+}
+
+run "extra_environment_refuses_app_connection_string" {
+  command = plan
+
+  variables {
+    extra_environment = { APP_CONNECTION_STRING = "Server=db;Password=x" }
+  }
+
+  expect_failures = [var.extra_environment]
+}
+
 run "extra_environment_cannot_carry_any_secret_looking_name" {
   command = plan
 
