@@ -147,12 +147,17 @@ group and exits, and ECS retries; after repeated failures the circuit breaker fa
 /workspace/gitdirs/<owner>/<repo>/    the runner's own git directories (closed to the agent)
 /workspace/memory/<owner>/<repo>/     the agent's NOTES.md and scripts/ for that repository
 /workspace/memory/_estate/            the same for requests that name no repository
-/workspace/agent-home/                the agent's home: mise runtimes, npm -g, pip --user, caches
+/workspace/agent-home/<owner>/<repo>/ the agent's home for that repository: mise runtimes, npm -g,
+                                      pip --user, caches
+/workspace/agent-home/_estate/        the same for requests that name no repository
 /workspace/scratch/                   requests that name no repository
 ```
 
 The first request for a repository pays for the clone and for whatever the agent installs; later
-ones reuse both.
+ones reuse both. The agent's home is per repository, so nothing a run leaves there reaches another
+repository's runs, and between runs it belongs to the runner (mode 0700). Before every run the
+runner removes what opencode would load by itself from it (its configuration, plugins, agent
+definitions and skills).
 
 **The memory mirror.** After every request the runner copies the changed files under
 `/workspace/memory` to `s3://<bucket>/<memory_prefix>` (put and delete). The mirror is one way and
@@ -211,7 +216,9 @@ Two consequences, both deliberate:
   holds the six capabilities the runner needs to switch accounts (`SETUID`, `SETGID`, `CHOWN`,
   `DAC_OVERRIDE`, `FOWNER` and `KILL`), and the module neither adds nor drops any. The only Linux
   parameter it sets is the init process, which reaps what a killed agent run leaves behind. The
-  agent itself holds no capability.
+  agent itself holds no capability. A root start that lacks any of the six refuses to start
+  rather than run the agent as root, so a policy that drops capabilities shows in the log group
+  at once.
 
 ## What the agent can reach
 
