@@ -8,6 +8,15 @@ than a `terraform apply`.
 - **minor**: a permission added, because the product gained a feature needing it
 - **patch**: documentation, validation, formatting; no change to what is granted
 
+## [4.3.1]
+
+### Fixed
+- `fix-runner`: the pool's image refusal compares the digest, not the whole reference. The image
+  variable accepts a `name:tag@sha256:...` spelling and a mirror's name, and the v1.5.0 digest
+  under either form is one a pool cannot lease (it sends no instance id, so two tasks would be
+  one runner to the queue and every job twice), so that digest is refused in a pool however it is
+  spelled. Both spellings are pinned by tests.
+
 ## [4.3.0]
 
 The `fix-runner` module can run the self-hosted fix runner as a pool: several Fargate tasks on the

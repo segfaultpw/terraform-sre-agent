@@ -1059,6 +1059,28 @@ run "a_pool_refuses_the_image_that_cannot_lease" {
   expect_failures = [aws_ecs_task_definition.this]
 }
 
+run "a_pool_refuses_the_v1_5_0_digest_with_a_tag_spelling" {
+  command = plan
+
+  variables {
+    runner_count = 2
+    image        = "ghcr.io/segfaultpw/sre-agent-opencode-runner:v1.5.0@sha256:ef95a56a8ae2763e7c9b1a98e261443a4489ca78ba449d47331f3d7a163b1b52"
+  }
+
+  expect_failures = [aws_ecs_task_definition.this]
+}
+
+run "a_pool_refuses_the_v1_5_0_digest_under_a_mirror_name" {
+  command = plan
+
+  variables {
+    runner_count = 2
+    image        = "123456789012.dkr.ecr.us-east-1.amazonaws.com/fix-runner@sha256:ef95a56a8ae2763e7c9b1a98e261443a4489ca78ba449d47331f3d7a163b1b52"
+  }
+
+  expect_failures = [aws_ecs_task_definition.this]
+}
+
 run "a_pool_accepts_an_image_the_module_does_not_know" {
   command = plan
 
