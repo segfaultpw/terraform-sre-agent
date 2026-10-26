@@ -300,7 +300,7 @@ run "a_short_digest_is_refused" {
   expect_failures = [var.image]
 }
 
-run "the_default_image_is_the_v1_5_0_runner_by_digest" {
+run "the_default_image_is_the_current_runner_by_digest" {
   command = plan
 
   variables {
@@ -308,8 +308,8 @@ run "the_default_image_is_the_v1_5_0_runner_by_digest" {
   }
 
   assert {
-    condition     = jsondecode(aws_ecs_task_definition.this.container_definitions)[0].image == "ghcr.io/segfaultpw/sre-agent-opencode-runner@sha256:8f476837c96f52eaec5b28fc9350313f65c4755cce75bb155e08cab9fe440e18"
-    error_message = "null means the default, the v1.5.0 runner pinned by its multi-architecture digest"
+    condition     = jsondecode(aws_ecs_task_definition.this.container_definitions)[0].image == "ghcr.io/segfaultpw/sre-agent-opencode-runner@sha256:f18cd90c22282f96bed99fec63d53f0fbdde8e8ccb8f019a02d72c63148cfad4"
+    error_message = "null means the default, the current runner pinned by its multi-architecture digest"
   }
 }
 

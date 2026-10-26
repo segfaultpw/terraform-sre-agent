@@ -42,12 +42,12 @@ variable "image" {
     The runner image, pinned by digest: ghcr.io/segfaultpw/sre-agent-opencode-runner@sha256:<64 hex>
     (a name:tag@sha256:... reference is accepted, and the digest decides). A tag is refused because
     it can move under a service that has no one watching it. The default is the sre-agent-opencode
-    v1.6.0 runner this module version was built against (a multi-architecture index); null means
+    v1.7.0 runner this module version was built against (a multi-architecture index); null means
     the default. Override it with the digest of another release, from
     https://github.com/segfaultpw/sre-agent-opencode/pkgs/container/sre-agent-opencode-runner, or of
     your own image derived from it (see "Adding what a repository needs" in the README).
   EOT
-  default     = "ghcr.io/segfaultpw/sre-agent-opencode-runner@sha256:8f476837c96f52eaec5b28fc9350313f65c4755cce75bb155e08cab9fe440e18"
+  default     = "ghcr.io/segfaultpw/sre-agent-opencode-runner@sha256:f18cd90c22282f96bed99fec63d53f0fbdde8e8ccb8f019a02d72c63148cfad4"
   nullable    = false
 
   validation {

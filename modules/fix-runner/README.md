@@ -37,9 +37,11 @@ The self-hosted fix runner is a plan feature (`self_hosted_fix_runner`).
    Read each value into a shell variable without echoing it, write it to a file only you can read,
    create the secret from the file, then delete the file. `printf` is a shell builtin, so the value
    is in no process list. Each value is the plain string, not a key/value JSON secret (the console's
-   default type), and it must have **no trailing newline**: the runner sends the value as it is in a
-   request header, and a header that ends in a newline is rejected, so a runner set up with `cat`
-   and Enter never polls.
+   default type), and each one the runner sends in a request header (the API key,
+   the static GitHub token, the provider keys) must have **no trailing newline**: a header that ends
+   in a newline is rejected, so a runner set up with `cat` and Enter never polls. The GitHub App
+   key is the exception: store the `.pem` exactly as downloaded, newlines and all, because the
+   runner reads it as a signing key and never puts it in a header.
 
    ```sh
    umask 077
@@ -87,9 +89,9 @@ The self-hosted fix runner is a plan feature (`self_hosted_fix_runner`).
    except when the secret's own name ends in a hyphen and six letters or digits (a secret called
    `sre-fix-runner-github`): the module cannot tell such a name from a real suffix, so copy the ARN
    from `create-secret` or `describe-secret`, never build it from the name.
-3. Apply the module. The image defaults to the `sre-agent-opencode` v1.6.0 runner pinned by its
-   multi-architecture digest (`ghcr.io/segfaultpw/sre-agent-opencode-runner@sha256:8f476837c96f52eaec5b28fc9350313f65c4755cce75bb155e08cab9fe440e18`), and `image` replaces it with another digest; a tag is
-   refused. Two keys of the image matter: one older than v1.6.0 knows no leases and no workspace
+3. Apply the module. The image defaults to the `sre-agent-opencode` v1.7.0 runner pinned by its
+   multi-architecture digest (`ghcr.io/segfaultpw/sre-agent-opencode-runner@sha256:f18cd90c22282f96bed99fec63d53f0fbdde8e8ccb8f019a02d72c63148cfad4`), and `image` replaces it with another digest; a tag is
+   refused. Two keys of the image matter: one older than v1.7.0 knows no App authentication, and one older than v1.6.0 no leases and no workspace
    split, so a `runner_count` above one needs this default (or a newer digest), and one older
    than v1.5.0 ignores `SRE_MEMORY_BUCKET` and `SRE_MEMORY_PREFIX`, so the notes then stay on the
    volume without the bucket mirror.

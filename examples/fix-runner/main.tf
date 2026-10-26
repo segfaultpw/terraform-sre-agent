@@ -3,9 +3,10 @@
 # that keeps their clones and notes, and a bucket you own that mirrors the notes.
 #
 # Before applying, create the three secrets once, outside Terraform so no value enters state, and
-# with no value on a command line. For each one, in bash or zsh (the value must have no trailing
-# newline, because the runner sends it as it is in a request header and a newline there is
-# rejected; printf is a shell builtin, so the value is in no process list):
+# with no value on a command line. For each one the runner sends in a request header (the API key,
+# the static GitHub token, the provider keys), in bash or zsh (the value must have no trailing
+# newline, because a newline there is rejected; printf is a shell builtin, so the value is in no
+# process list). The GitHub App key is the exception: the .pem as downloaded, newlines and all.
 #
 #   umask 077
 #   IFS= read -rs value        # paste the value and press Enter; nothing is echoed
