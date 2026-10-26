@@ -100,6 +100,29 @@ variable "ephemeral_storage_gib" {
   }
 }
 
+variable "runner_count" {
+  type        = number
+  description = <<-EOT
+    How many runner tasks the service runs on the one workspace volume, one by default. The queue
+    leases each job to the runner instance that collects it, so two tasks never do one request
+    twice; each task works in its own directories (under instances/<its instance id>) while the
+    runner's per-repository locks guard the one shared memory tree. Above 1 the task definition
+    sets SRE_WORKSPACE_PER_INSTANCE=1 and SRE_MEMORY_ROOT=/workspace/memory. At 1 nothing changes:
+    one task, replaced stop-first, and neither pool variable is set. Raise the count through this
+    variable, never by editing the service's desired count outside Terraform: such an edit is
+    overwritten at the next apply, and the pool variables would not follow it. A pool needs the
+    sre-agent-opencode v1.6.0 runner image or newer; an older image sends no instance id, so the
+    queue cannot lease, every job is offered to every task, and two tasks can take the same request
+    and do it twice.
+  EOT
+  default     = 1
+
+  validation {
+    condition     = var.runner_count == floor(var.runner_count) && var.runner_count >= 1
+    error_message = "runner_count must be a whole number of tasks, at least 1."
+  }
+}
+
 ## Secrets
 
 variable "api_key_secret_arn" {
@@ -251,7 +274,10 @@ variable "extra_environment" {
     TOKEN, SECRET, PASS, AUTH, PRIVATE, CREDENTIAL, DSN, DATABASE_URL or CONNECTION_STRING) is
     refused, and so is any variable this module sets itself or carries as a secret, and SRE_ONCE,
     which would make the runner exit after one poll. SRE_RUNNER_SETUP must be an absolute path in
-    the image, never under /workspace, which the agent can write.
+    the image, never under /workspace, which the agent can write. With runner_count above 1,
+    SRE_WORKSPACE_PER_INSTANCE and SRE_MEMORY_ROOT are the module's own as well and are refused
+    (it sets both for the pool); at 1 they are yours, so a single task can still opt into the
+    split workspace on its own.
     Also refused are the names that move the boundary between the runner and the agent: PATH, HOME,
     ENV, BASH_ENV, NODE_OPTIONS, NODE_PATH, SRE_RUNNER_USER, SRE_AGENT_USER, and any name that
     starts with LD_, GIT_ or OPENCODE_.

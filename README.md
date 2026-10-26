@@ -25,7 +25,7 @@ Nothing in the read modules can create, modify or delete.
 | [`aws-iam-hygiene`](modules/aws-iam-hygiene) | The role behind the AWS IAM hygiene connector (`aws_iam`), so self-healing can deactivate an access key unused for 90 days | `iam:GetUser`, `iam:ListAccessKeys`, `iam:GetAccessKeyLastUsed` and `iam:UpdateAccessKey` on the account's users. Never deletes or creates a key. |
 | [`aws-cleanup`](modules/aws-cleanup) | The role behind the AWS cleanup connector (`aws_cleanup`), so self-healing can delete what scans found unused once deletions are on. Deleting the role stops every deletion | Deletes of IAM access keys and login profiles, EBS volumes, snapshots and images, Elastic IP releases and log retention, each behind its own switch, scoped to resource types, with a Deny on anything tagged `sre-agent:protect`. |
 | [`verifier`](modules/verifier) | Where SRE Agent's sandbox verification runs, in your own account instead of ours | A poller Lambda, Fargate task definitions for the published verifier images, a VPC with outbound HTTPS only, and a task role with no permissions. The poller can start only those tasks; it cannot read anything else in the account. |
-| [`fix-runner`](modules/fix-runner) | SRE Agent's self-hosted fix runner on ECS Fargate, in your own account | A single Fargate task that polls SRE Agent and answers fix requests with your model key, an encrypted EFS workspace that keeps its clones and notes, an S3 bucket that mirrors the notes, and a task role with the workspace and that bucket prefix only. No inbound rule, no load balancer. The agent has no AWS access unless you set `agent_aws_access`. |
+| [`fix-runner`](modules/fix-runner) | SRE Agent's self-hosted fix runner on ECS Fargate, in your own account | One or more Fargate tasks (`runner_count`, one by default, each leasing its own jobs off the queue) that poll SRE Agent and answer fix requests with your model key, an encrypted EFS workspace that keeps their clones and notes, an S3 bucket that mirrors the notes, and a task role with the workspace and that bucket prefix only. No inbound rule, no load balancer. The agent has no AWS access unless you set `agent_aws_access`. |
 | [`kubernetes-rbac`](modules/kubernetes-rbac) | Read-only cluster access | `get`/`list` on pods, nodes, namespaces, services, deployments, replicasets, jobs, cronjobs, plus metrics and events |
 
 ## Start here
@@ -100,7 +100,10 @@ opens the pull request with your GitHub token, so **SRE Agent never connects to 
 workspace is an encrypted EFS volume, so clones, installed tools and the agent's notes survive a
 replaced task, and the notes are mirrored one way to an S3 bucket you own. The agent runs as a
 second Linux account with no AWS access unless you set `agent_aws_access`; the image is pinned by
-digest and exactly one task runs. See [`examples/fix-runner`](examples/fix-runner), and read the
+digest and `runner_count` tasks run, one by default. Above one the queue leases each job to the
+task that collects it, so two tasks never do one request twice: each works in its own directories
+on the shared volume and the runner's per-repository locks guard the one memory tree. See
+[`examples/fix-runner`](examples/fix-runner), and read the
 module README's "What the agent can reach" before you grant the task role anything.
 
 ## Why a role rather than an access key

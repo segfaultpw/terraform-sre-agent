@@ -16,7 +16,7 @@ This module deploys the runner image published by
 variables it reads and what bounds the agent; this README says how this module runs it.
 
 ```
-SRE Agent  <---- HTTPS long poll (outbound only) ----  Fargate task (desired count 1)
+SRE Agent  <---- HTTPS long poll (outbound only) ----  Fargate tasks (runner_count, 1 by default)
                                                          runner (uid 10001) + agent (uid 10002)
                                                               |                    |
                                                   /workspace (EFS, encrypted)   S3 bucket you own
@@ -98,7 +98,7 @@ module "sre_agent_fix_runner" {
 
 | Resource | Notes |
 |---|---|
-| ECS service, one Fargate task | Desired count 1, maximum percent 100, minimum healthy percent 0, no load balancer, deployment circuit breaker on with rollback. ARM64 by default, 2 vCPU and 8 GiB. |
+| ECS service, `runner_count` Fargate tasks | Desired count `runner_count` (1 by default), maximum percent 100, minimum healthy percent 0, so a deploy replaces the tasks one at a time and never runs more than the count at once. No load balancer, deployment circuit breaker on with rollback. ARM64 by default, 2 vCPU and 8 GiB each. |
 | EFS file system, one access point, a mount target per subnet | Encrypted at rest (your KMS key with `efs_kms_key_arn`), TLS enforced by the file system policy and requested in the mount, elastic throughput, cold files to Infrequent Access, daily AWS Backup (`enable_backup`). Mounted at `/workspace`. |
 | S3 bucket (or yours by name) | The memory mirror: versioning, SSE-S3, all four public access blocks, no ACLs, a TLS-only bucket policy, old versions expire after 90 days. |
 | `-task` role | The workspace volume (through the one access point), list/get/put/delete on the memory prefix, the bucket's key when you set `memory_bucket_kms_key_arn`, and exactly the policies in `extra_policy_arns`. |
@@ -108,18 +108,34 @@ module "sre_agent_fix_runner" {
 | VPC, one public subnet, a private subnet per zone, NAT gateway | Built unless you pass `vpc_id` and `private_subnet_ids`. |
 | ECS cluster | Built unless you pass `cluster_arn`. |
 
-## One runner, replaced stop-first
+## A pool of runner tasks on one volume
 
-The queue is not a lease: two runners sharing one key can both collect the same request and do the
-work twice. So the service runs exactly one task and a deployment stops the old task before it
-starts the new one (maximum 100 percent, minimum healthy 0). Do not raise `desired_count` by hand.
+`runner_count` (default 1) sets how many tasks the service runs. The queue leases a job to the
+runner instance that collects it, and no other instance is offered that job until the lease ends,
+which is what makes two tasks on one API key safe: they never do one request twice. Each task works
+in its own directories on the shared volume, with `SRE_WORKSPACE_PER_INSTANCE=1` and
+`SRE_MEMORY_ROOT=/workspace/memory` set on the task definition: its clones, git directories, agent
+homes and scratch live under `/workspace/instances/<its instance id>`, while the memory stays one
+shared tree, because the runner takes a per-repository lock before it touches a repository's notes
+and holds it until the run is over. Two tasks therefore never write the same notes at once, and a
+request whose repository is busy on another task is answered honestly rather than waited on. At 1
+nothing changes: one task, replaced stop-first, and neither pool variable is set. The runner names
+itself from `SRE_RUNNER_INSTANCE` when you set it (through `extra_environment`) and otherwise from
+the task's hostname, and ECS gives every task a hostname of its own, so the instances differ
+without setting anything.
 
-What that does and does not guarantee. ECS counts only tasks that are `RUNNING` or `PENDING`
-against the maximum, so the replacement can be started as soon as the old task has left `RUNNING`,
-which is before the old container has finished stopping. A short overlap of the two is therefore
-possible: the old runner exits on `SIGTERM` within seconds and a Fargate task takes far longer than
-that to start, so in practice the old one is gone first, but the module does not promise it, and it
-does not promise that the volume is never mounted twice at once.
+A pool needs the runner image to name its instance to SRE Agent: the `sre-agent-opencode` **v1.6.0**
+runner or newer. An older image sends no instance id, so the queue cannot lease, every job is
+offered to every task, and two tasks can take the same request and do it twice; do not raise
+`runner_count` on an image older than that.
+
+What a deployment does and does not guarantee. It never runs more tasks than the count at once
+(maximum 100 percent, minimum healthy 0): ECS counts only tasks that are `RUNNING` or `PENDING`
+against the maximum, so each task's replacement is started as soon as that task has left
+`RUNNING`, which is before its container has finished stopping. A short overlap of the two is
+therefore possible: the old runner exits on `SIGTERM` within seconds and a Fargate task takes far
+longer than that to start, so in practice the old one is gone first, but the module does not
+promise it, and it does not promise that the volume is never mounted twice at once.
 
 The runner installs no `SIGTERM` handler, so a stop ends it at once. The 120 seconds in the task
 definition (`stopTimeout`, Fargate's maximum) are a ceiling, not a wait: they give nothing to a
@@ -127,10 +143,15 @@ request in flight today, and they are kept so that a runner release that finishe
 `SIGTERM` is not cut short. A request the runner was handling when its task stopped is lost: SRE
 Agent fails it 45 minutes after it was queued, and nothing reaches your default branch.
 
-A replacement is a gap while the new task starts in which the runner is not polling; a request that
-arrives meanwhile waits, or after five minutes without a poll runs on SRE Agent's own agent, which
-the card says. Change the image digest (or any other setting that changes the task definition),
-apply, and ECS does the replacement; the volume and the bucket keep the clones and the notes.
+Each replaced task is a gap while its replacement starts, in which that one runner is not polling;
+a request that arrives meanwhile waits, or after five minutes without a poll runs on SRE Agent's
+own agent, which the card says. Change the image digest (or any other setting that changes the
+task definition), apply, and ECS replaces the tasks one at a time; the volume and the bucket keep
+the clones and the notes.
+
+Raise the count through `runner_count`, never by editing the service's desired count in the
+console: a change made outside Terraform is overwritten at the next apply, and the task
+definition's pool variables would not follow it.
 
 The container has no health check because the runner has no port. Its health is SRE Agent's: the
 Integrations card says **Polling now**, **Not polling**, **Never polled** or **Switched off**. A
@@ -151,6 +172,11 @@ group and exits, and ECS retries; after repeated failures the circuit breaker fa
 /workspace/agent-home/_estate/        the same for requests that name no repository
 /workspace/scratch/                   requests that name no repository
 ```
+
+With `runner_count` above 1 each task works under `/workspace/instances/<its instance id>/` (its
+own `repos/`, `gitdirs/`, `agent-home/` and `scratch/`), and the memory stays one shared tree: the
+runner takes a lock per repository before it writes that repository's notes, and one for the
+mirror's state files, so two tasks never write the same notes at once.
 
 The first request for a repository pays for the clone and for whatever the agent installs; later
 ones reuse both. The agent's home is per repository, so nothing a run leaves there reaches another
@@ -205,6 +231,10 @@ neither account could write what the other made. So the access point sets only a
 (10001:10001) and mode 0755; the runner sets its own modes inside it when it starts (the workspace
 is 0711, `memory/` and the git directories 0700). For the same reason the task definition sets no
 `user`.
+
+The one access point serves every task, however many `runner_count` runs: EFS allows concurrent
+writers, and it is the runner's per-repository locks that serialize the shared memory, not the
+access point.
 
 Two consequences, both deliberate:
 
@@ -316,7 +346,10 @@ CLI, `kubectl` and `mise`). Three ways to add more, in the order to try them:
 credential: a name containing `KEY`, `TOKEN`, `SECRET`, `PASS`, `AUTH`, `PRIVATE`, `CREDENTIAL`,
 `DSN`, `DATABASE_URL` or `CONNECTION_STRING` is refused, and so is any variable this module sets
 itself or carries as a secret, and `SRE_ONCE` (the runner would exit after one poll and ECS would
-restart it in a loop). Also refused: `PATH`, `HOME`, `ENV`, `BASH_ENV`, `NODE_OPTIONS`,
+restart it in a loop). With `runner_count` above 1 that includes `SRE_WORKSPACE_PER_INSTANCE` and
+`SRE_MEMORY_ROOT`, which the module sets for the pool; at 1 they are yours, so a single task can
+still opt into the split workspace on its own.
+Also refused: `PATH`, `HOME`, `ENV`, `BASH_ENV`, `NODE_OPTIONS`,
 `NODE_PATH`, `SRE_RUNNER_USER`, `SRE_AGENT_USER` and any name starting with `LD_`, `GIT_` or
 `OPENCODE_`, because these move the boundary between the runner and the agent (which programs the
 root entrypoint and the runner run, who they run as, and what the agent is configured with); a
@@ -344,6 +377,7 @@ as root at the next start.
 | `cpu_architecture` | `ARM64` | `ARM64` or `X86_64`. |
 | `cpu`, `memory` | `2048`, `8192` | Fargate sizing. A pair Fargate does not offer is refused at plan time. |
 | `ephemeral_storage_gib` | `30` | Scratch beside the volume, 21 to 200. |
+| `runner_count` | `1` | How many runner tasks run on the one volume. Above 1 the queue leases each job to the task that collects it, each task works under `instances/<its instance id>`, and the per-repository locks guard the shared memory. A pool needs the runner image v1.6.0 or newer. |
 | `memory_bucket_name` | `null` | An existing bucket for the memory mirror. Null creates one. |
 | `memory_bucket_kms_key_arn` | `null` | The customer-managed key behind an existing `memory_bucket_name`, so the task role may use it through S3. Refused without `memory_bucket_name`. |
 | `memory_prefix` | `memory/` | The mirror's prefix, `SRE_MEMORY_PREFIX`; the task role's bucket access stops here. Held to the runner's own rule: at most 512 characters, no empty, `.` or `..` part. |
@@ -392,7 +426,7 @@ on:
 
 | Item | About |
 |---|---|
-| Fargate, ARM64, 2 vCPU and 8 GiB, running all month | $68 |
+| Fargate, ARM64, 2 vCPU and 8 GiB, running all month | $68 per task: `runner_count` multiplies it |
 | NAT gateway (not with an existing VPC) | $33 plus $0.045 per GB it processes |
 | The NAT gateway's Elastic IP (a public IPv4 address) | $3.65 |
 | EFS | $0.30 per GB-month in standard storage, less in Infrequent Access; elastic throughput is billed per GB read and written |

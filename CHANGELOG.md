@@ -8,6 +8,34 @@ than a `terraform apply`.
 - **minor**: a permission added, because the product gained a feature needing it
 - **patch**: documentation, validation, formatting; no change to what is granted
 
+## [4.3.0]
+
+The `fix-runner` module can run the self-hosted fix runner as a pool: several Fargate tasks on the
+one workspace volume, each leasing its own jobs, so a request is answered while another task is
+busy on a long checkout or a big run. The self-hosted fix runner is a plan feature
+(`self_hosted_fix_runner`).
+
+### Added
+- `fix-runner`: `runner_count` (default `1`). At `1` nothing changes: one task, the same task
+  definition as 4.2.0, replaced stop-first. Above `1` the service runs that many tasks and the task
+  definition sets `SRE_WORKSPACE_PER_INSTANCE=1` and `SRE_MEMORY_ROOT=/workspace/memory`: each task
+  works in its own directories on the shared volume (its clones, git directories, agent homes and
+  scratch under `instances/<its instance id>`), while the memory stays one shared tree the runner's
+  per-repository locks guard, so two tasks never write the same notes at once and a request whose
+  repository is busy on another task is answered honestly rather than waited on. The queue leases
+  each job to the runner instance that collects it, and no other instance is offered that job until
+  the lease ends, which is what makes two tasks on one API key safe. A deployment never runs more
+  tasks than the count at once and replaces them one at a time, so each task has the replacement gap
+  one task always had. Raise the count through the variable, never by editing the service's desired
+  count outside Terraform. A pool needs the `sre-agent-opencode` **v1.6.0** runner image or newer:
+  an older image sends no instance id, so the queue cannot lease, every job is offered to every
+  task, and two tasks can take the same request and do it twice.
+- `fix-runner`: `extra_environment` refuses `SRE_WORKSPACE_PER_INSTANCE` and `SRE_MEMORY_ROOT`
+  when `runner_count` is above `1` (the module sets both for the pool); at `1` they stay the
+  operator's, so a single task can still opt into the split workspace on its own.
+
+Nothing existing changes at the default count: the module plans exactly what it did in 4.2.0.
+
 ## [4.2.0]
 
 The `fix-runner` module runs SRE Agent's self-hosted fix runner on ECS Fargate in your own account.

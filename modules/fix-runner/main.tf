@@ -6,10 +6,13 @@
  * fences, runs the protected-paths gate, pushes a branch and opens the pull request. SRE Agent
  * never connects to your account, so there is no listener, no load balancer and no inbound rule.
  *
- *   - One Fargate task, desired count 1, replaced stop-first (maximum 100 percent, minimum healthy
- *     0): the queue is not a lease, and two tasks would do one request twice. ECS starts the
- *     replacement once the old task has left RUNNING, so a short overlap with a task that is still
- *     stopping is possible.
+ *   - runner_count Fargate tasks on the one workspace volume, one by default, replaced stop-first
+ *     (maximum 100 percent, minimum healthy 0): the queue leases a job to the runner instance
+ *     that collects it, so two tasks never do one request twice. Above 1 the task definition sets
+ *     SRE_WORKSPACE_PER_INSTANCE=1 and SRE_MEMORY_ROOT=/workspace/memory: each task works in its
+ *     own directories under instances/<its instance id>, and the runner's per-repository locks
+ *     guard the one shared memory tree. ECS starts a replacement once the old task has left
+ *     RUNNING, so a short overlap with a task that is still stopping is possible.
  *   - /workspace is an encrypted EFS volume, so the clones, the agent's home and its notes survive
  *     a replaced task. The access point sets a root directory and who owns it at creation and no
  *     posix_user, because the image starts as root and its runner switches between two accounts.
@@ -129,6 +132,11 @@ locals {
     },
     # Only the exact value 1 opts in, so false is the absence of the variable.
     var.agent_aws_access ? { SRE_AGENT_AWS_ACCESS = "1" } : {},
+    # The pool layout: each task works under instances/<its instance id> on the shared volume,
+    # and the memory stays one tree that the runner's per-repository locks serialize the writers
+    # of. At the default count of one neither variable exists, so that task definition is exactly
+    # the one this module has always set.
+    var.runner_count > 1 ? { SRE_WORKSPACE_PER_INSTANCE = "1", SRE_MEMORY_ROOT = "/workspace/memory" } : {},
   )
 
   # ECS tasks are the principal whose assumption AWS documents the confused-deputy keys for.
@@ -763,6 +771,18 @@ resource "aws_ecs_task_definition" "this" {
       condition     = local.expected_provider_key == null ? true : contains(keys(var.provider_key_secret_arns), local.expected_provider_key)
       error_message = "sre_model ${var.sre_model} reads its key from ${coalesce(local.expected_provider_key, "its provider's variable")}, which provider_key_secret_arns does not hold. Add it, or the agent would call the model with no key."
     }
+
+    precondition {
+      # A variable validation cannot read another variable on every Terraform this module still
+      # takes (cross-variable validation needs 1.9), so the refusal lives here. Above one task
+      # the module sets both names for the pool, and merge() would silently drop a value from
+      # extra_environment; at one task they are the operator's to set.
+      condition = var.runner_count > 1 ? (
+        !contains(keys(var.extra_environment), "SRE_WORKSPACE_PER_INSTANCE")
+        && !contains(keys(var.extra_environment), "SRE_MEMORY_ROOT")
+      ) : true
+      error_message = "With runner_count above 1 this module sets SRE_WORKSPACE_PER_INSTANCE and SRE_MEMORY_ROOT itself (the pool's workspace split and the one shared memory tree), so extra_environment cannot carry them; at runner_count 1 they are yours."
+    }
   }
 }
 
@@ -772,13 +792,16 @@ resource "aws_ecs_service" "this" {
   task_definition = aws_ecs_task_definition.this.arn
   launch_type     = "FARGATE"
 
-  # One runner. The queue is not a lease: two tasks sharing one key can both collect the same
-  # request and do the work twice, so a deployment stops the old task before it starts the new
-  # one. ECS counts only RUNNING and PENDING tasks against the maximum, so the replacement can be
-  # provisioned once the old task has left RUNNING, while it is still stopping: a short overlap
-  # (the old runner exits on SIGTERM in seconds, a Fargate start takes far longer) is possible, and
-  # the module does not claim more than that.
-  desired_count                      = 1
+  # runner_count tasks, one by default. The queue leases a job to the runner instance that
+  # collects it, and no other instance is offered that job until the lease ends, so two tasks
+  # never do one request twice; each works in its own directories on the shared volume, and the
+  # runner's per-repository locks guard the memory, so two tasks are safe on one volume. The
+  # deployment bounds keep a replacement from running beside its predecessor: ECS counts only
+  # RUNNING and PENDING tasks against the maximum, so each task's replacement is provisioned once
+  # that task has left RUNNING, while it is still stopping: a short overlap (the old runner exits
+  # on SIGTERM in seconds, a Fargate start takes far longer) is possible, and the module does not
+  # claim more than that.
+  desired_count                      = var.runner_count
   deployment_maximum_percent         = 100
   deployment_minimum_healthy_percent = 0
 

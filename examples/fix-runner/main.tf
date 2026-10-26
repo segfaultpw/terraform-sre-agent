@@ -1,6 +1,6 @@
-# SRE Agent's self-hosted fix runner on ECS Fargate, in your own account: one task that polls SRE
-# Agent for fix requests, a workspace volume that keeps its clones and notes, and a bucket you own
-# that mirrors the notes.
+# SRE Agent's self-hosted fix runner on ECS Fargate, in your own account: runner tasks (one by
+# default, a pool through runner_count) that poll SRE Agent for fix requests, a workspace volume
+# that keeps their clones and notes, and a bucket you own that mirrors the notes.
 #
 # Before applying, create the three secrets once, outside Terraform so no value enters state, and
 # with no value on a command line. For each one, in bash or zsh (the value must have no trailing
@@ -47,6 +47,11 @@ module "sre_agent_fix_runner" {
   sre_agent_url = var.sre_agent_url
   sre_model     = var.sre_model
   image         = var.image
+
+  # One task by default. Raise it for a pool: the queue leases each job to the
+  # task that collects it, and each task works in its own directories on the
+  # shared volume (the runner image v1.6.0 or newer).
+  runner_count = var.runner_count
 
   api_key_secret_arn      = var.api_key_secret_arn
   github_token_secret_arn = var.github_token_secret_arn

@@ -1,9 +1,10 @@
-# What this module must never loosen: one task that is replaced stop-first (the queue is not a
-# lease), no inbound and no load balancer, a task role that holds only the workspace, the memory
-# prefix and what the operator attached, an execution role that reads only the named secrets, a
-# container that starts as root and keeps the capabilities the runner needs to switch accounts, and
-# an image that is not pinned by digest refused before anything is planned. Plans run against
-# mocked providers, so no credentials, network or state are used.
+# What this module must never loosen: runner_count tasks on the one workspace volume with the
+# queue leasing each job to the instance that collects it (one task by default, replaced
+# stop-first), no inbound and no load balancer, a task role that holds only the workspace, the
+# memory prefix and what the operator attached, an execution role that reads only the named
+# secrets, a container that starts as root and keeps the capabilities the runner needs to switch
+# accounts, and an image that is not pinned by digest refused before anything is planned. Plans
+# run against mocked providers, so no credentials, network or state are used.
 
 mock_provider "aws" {
   mock_resource "aws_iam_role" {
@@ -73,17 +74,17 @@ variables {
 
 ## The service
 
-run "one_task_that_is_replaced_stop_first_with_no_load_balancer" {
+run "the_default_count_is_one_task_replaced_stop_first_with_no_load_balancer" {
   command = apply
 
   assert {
     condition     = aws_ecs_service.this.desired_count == 1
-    error_message = "one runner: the queue is not a lease, two tasks would do one request twice"
+    error_message = "runner_count defaults to one task, the 4.2.0 shape"
   }
 
   assert {
     condition     = aws_ecs_service.this.deployment_maximum_percent == 100 && aws_ecs_service.this.deployment_minimum_healthy_percent == 0
-    error_message = "a deploy stops the old task before it starts the new one, never two at once"
+    error_message = "a deploy never runs more tasks than the count at once: it stops one before it starts its replacement"
   }
 
   assert {
@@ -110,6 +111,70 @@ run "one_task_that_is_replaced_stop_first_with_no_load_balancer" {
     condition     = aws_ecs_service.this.deployment_circuit_breaker[0].enable == true && aws_ecs_service.this.deployment_circuit_breaker[0].rollback == true
     error_message = "a deployment that cannot start rolls back to the task that was running, instead of retrying with no one watching"
   }
+}
+
+run "three_tasks_share_one_volume_and_each_leases_its_own_jobs" {
+  command = apply
+
+  variables {
+    runner_count = 3
+  }
+
+  assert {
+    condition     = aws_ecs_service.this.desired_count == 3
+    error_message = "runner_count is the service's desired count"
+  }
+
+  assert {
+    condition     = aws_ecs_service.this.deployment_maximum_percent == 100 && aws_ecs_service.this.deployment_minimum_healthy_percent == 0
+    error_message = "a deploy replaces the tasks one at a time, never more than the count at once"
+  }
+
+  assert {
+    condition = {
+      for e in jsondecode(aws_ecs_task_definition.this.container_definitions)[0].environment : e.name => e.value
+      } == {
+      SRE_SERVER_URL             = "https://sre.example.com"
+      SRE_MODEL                  = "openrouter/deepseek/deepseek-v4-pro"
+      SRE_WORKSPACE              = "/workspace"
+      SRE_MEMORY_BUCKET          = "sre-agent-fix-runner-memory-123456789012-us-east-1"
+      SRE_MEMORY_PREFIX          = "memory/"
+      SRE_WORKSPACE_PER_INSTANCE = "1"
+      SRE_MEMORY_ROOT            = "/workspace/memory"
+      AWS_REGION                 = "us-east-1"
+      AWS_DEFAULT_REGION         = "us-east-1"
+    }
+    error_message = "above 1 the task definition gains exactly SRE_WORKSPACE_PER_INSTANCE=1 and SRE_MEMORY_ROOT=/workspace/memory, so each task works under instances/<its instance id> while the memory stays one shared tree"
+  }
+}
+
+run "at_one_task_the_environment_holds_neither_pool_variable" {
+  command = apply
+
+  assert {
+    condition     = !contains([for e in jsondecode(aws_ecs_task_definition.this.container_definitions)[0].environment : e.name], "SRE_WORKSPACE_PER_INSTANCE") && !contains([for e in jsondecode(aws_ecs_task_definition.this.container_definitions)[0].environment : e.name], "SRE_MEMORY_ROOT")
+    error_message = "at runner_count 1 the environment is exactly the 4.2.0 shape: neither pool variable is set"
+  }
+}
+
+run "a_runner_count_below_one_is_refused" {
+  command = plan
+
+  variables {
+    runner_count = 0
+  }
+
+  expect_failures = [var.runner_count]
+}
+
+run "a_fractional_runner_count_is_refused" {
+  command = plan
+
+  variables {
+    runner_count = 2.5
+  }
+
+  expect_failures = [var.runner_count]
 }
 
 run "the_runner_is_arm64_unless_asked_otherwise" {
@@ -948,6 +1013,46 @@ run "extra_environment_cannot_replace_what_the_module_sets" {
   }
 
   expect_failures = [var.extra_environment]
+}
+
+run "extra_environment_cannot_set_the_pool_workspace_split_in_a_pool" {
+  command = plan
+
+  variables {
+    runner_count      = 2
+    extra_environment = { SRE_WORKSPACE_PER_INSTANCE = "1" }
+  }
+
+  expect_failures = [aws_ecs_task_definition.this]
+}
+
+run "extra_environment_cannot_set_the_pool_memory_root_in_a_pool" {
+  command = plan
+
+  variables {
+    runner_count      = 3
+    extra_environment = { SRE_MEMORY_ROOT = "/workspace/memory" }
+  }
+
+  expect_failures = [aws_ecs_task_definition.this]
+}
+
+run "at_one_task_the_pool_variables_stay_the_operator_s" {
+  command = apply
+
+  variables {
+    extra_environment = { SRE_WORKSPACE_PER_INSTANCE = "1", SRE_MEMORY_ROOT = "/workspace/memory" }
+  }
+
+  assert {
+    condition     = { for e in jsondecode(aws_ecs_task_definition.this.container_definitions)[0].environment : e.name => e.value }["SRE_WORKSPACE_PER_INSTANCE"] == "1"
+    error_message = "at runner_count 1 the module sets neither pool variable, so the operator's SRE_WORKSPACE_PER_INSTANCE reaches the runner as in 4.2.0"
+  }
+
+  assert {
+    condition     = { for e in jsondecode(aws_ecs_task_definition.this.container_definitions)[0].environment : e.name => e.value }["SRE_MEMORY_ROOT"] == "/workspace/memory"
+    error_message = "at runner_count 1 the module sets neither pool variable, so the operator's SRE_MEMORY_ROOT reaches the runner as in 4.2.0"
+  }
 }
 
 run "extra_environment_cannot_set_the_memory_bucket" {
