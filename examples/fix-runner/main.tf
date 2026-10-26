@@ -3,9 +3,10 @@
 # that keeps their clones and notes, and a bucket you own that mirrors the notes.
 #
 # Before applying, create the three secrets once, outside Terraform so no value enters state, and
-# with no value on a command line. For each one, in bash or zsh (the value must have no trailing
-# newline, because the runner sends it as it is in a request header and a newline there is
-# rejected; printf is a shell builtin, so the value is in no process list):
+# with no value on a command line. For each one the runner sends in a request header (the API key,
+# the static GitHub token, the provider keys), in bash or zsh (the value must have no trailing
+# newline, because a newline there is rejected; printf is a shell builtin, so the value is in no
+# process list). The GitHub App key is the exception: the .pem as downloaded, newlines and all.
 #
 #   umask 077
 #   IFS= read -rs value        # paste the value and press Enter; nothing is echoed
@@ -17,11 +18,14 @@
 # Each value is the plain string, not key/value JSON. Create them in the Region you deploy to:
 #   1. SRE Agent, Settings, API Keys: a key with the single scope fix_runner:poll.
 #   2. A GitHub token that may push a branch and open a pull request in the repositories to fix
-#      (contents and pull requests, write).
+#      (contents and pull requests, write). Or a GitHub App instead: the App's numeric id and a
+#      secret holding its private key, the .pem file as downloaded from GitHub (newlines and all,
+#      no encoding: cp it to key.pem and create the secret from the file). One shape exactly,
+#      never both and never neither; the App needs the runner image v1.7.0 or newer.
 #   3. Your model provider's API key.
 #
 # Then register the runner in SRE Agent (Integrations, Fix runner), pass the three secrets' full ARNs
-# (with their six-character suffixes), and apply. The module runs the sre-agent-opencode v1.5.0
+# (with their six-character suffixes), and apply. The module runs the sre-agent-opencode v1.6.0
 # image by digest unless you pass another digest as image.
 
 terraform {
@@ -55,6 +59,12 @@ module "sre_agent_fix_runner" {
 
   api_key_secret_arn      = var.api_key_secret_arn
   github_token_secret_arn = var.github_token_secret_arn
+
+  # The GitHub App shape, instead of the token and never both: the App's numeric
+  # id and the ARN of the secret holding its private key PEM.
+  github_app_id                     = var.github_app_id
+  github_app_private_key_secret_arn = var.github_app_private_key_secret_arn
+
   provider_key_secret_arns = {
     (var.provider_key_variable) = var.provider_key_secret_arn
   }

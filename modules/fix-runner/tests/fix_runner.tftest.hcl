@@ -300,7 +300,7 @@ run "a_short_digest_is_refused" {
   expect_failures = [var.image]
 }
 
-run "the_default_image_is_the_v1_5_0_runner_by_digest" {
+run "the_default_image_is_the_current_runner_by_digest" {
   command = plan
 
   variables {
@@ -308,8 +308,8 @@ run "the_default_image_is_the_v1_5_0_runner_by_digest" {
   }
 
   assert {
-    condition     = jsondecode(aws_ecs_task_definition.this.container_definitions)[0].image == "ghcr.io/segfaultpw/sre-agent-opencode-runner@sha256:8f476837c96f52eaec5b28fc9350313f65c4755cce75bb155e08cab9fe440e18"
-    error_message = "null means the default, the v1.5.0 runner pinned by its multi-architecture digest"
+    condition     = jsondecode(aws_ecs_task_definition.this.container_definitions)[0].image == "ghcr.io/segfaultpw/sre-agent-opencode-runner@sha256:f18cd90c22282f96bed99fec63d53f0fbdde8e8ccb8f019a02d72c63148cfad4"
+    error_message = "null means the default, the current runner pinned by its multi-architecture digest"
   }
 }
 
@@ -760,6 +760,181 @@ run "a_model_without_a_provider_prefix_is_refused" {
   expect_failures = [var.sre_model]
 }
 
+## GitHub authentication: a GitHub App or static tokens, one shape exactly
+
+run "app_mode_sets_the_app_id_and_carries_the_key" {
+  command = apply
+
+  variables {
+    github_token_secret_arn           = null
+    github_app_id                     = "123456"
+    github_app_private_key_secret_arn = "arn:aws:secretsmanager:us-east-1:123456789012:secret:sre-fix-runner-app-key-QqRrSs"
+  }
+
+  assert {
+    condition = {
+      for e in jsondecode(aws_ecs_task_definition.this.container_definitions)[0].environment : e.name => e.value
+      } == {
+      SRE_SERVER_URL     = "https://sre.example.com"
+      SRE_MODEL          = "openrouter/deepseek/deepseek-v4-pro"
+      SRE_WORKSPACE      = "/workspace"
+      SRE_MEMORY_BUCKET  = "sre-agent-fix-runner-memory-123456789012-us-east-1"
+      SRE_MEMORY_PREFIX  = "memory/"
+      SRE_GITHUB_APP_ID  = "123456"
+      AWS_REGION         = "us-east-1"
+      AWS_DEFAULT_REGION = "us-east-1"
+    }
+    error_message = "App mode adds exactly SRE_GITHUB_APP_ID as a plain value; the id is not a secret"
+  }
+
+  assert {
+    condition = {
+      for s in jsondecode(aws_ecs_task_definition.this.container_definitions)[0].secrets : s.name => s.valueFrom
+      } == {
+      SRE_API_KEY                = "arn:aws:secretsmanager:us-east-1:123456789012:secret:sre-fix-runner-key-AbCdEf"
+      SRE_GITHUB_APP_PRIVATE_KEY = "arn:aws:secretsmanager:us-east-1:123456789012:secret:sre-fix-runner-app-key-QqRrSs"
+      OPENROUTER_API_KEY         = "arn:aws:secretsmanager:us-east-1:123456789012:secret:openrouter-key-MnOpQr"
+    }
+    error_message = "the App's key is injected as SRE_GITHUB_APP_PRIVATE_KEY and neither static token exists in App mode"
+  }
+
+  assert {
+    condition = contains(flatten([
+      for s in jsondecode(aws_iam_role_policy.execution.policy).Statement : s.Resource if s.Sid == "ReadTheSecrets"
+    ]), "arn:aws:secretsmanager:us-east-1:123456789012:secret:sre-fix-runner-app-key-QqRrSs")
+    error_message = "the execution role may read the App key's secret"
+  }
+}
+
+run "pat_mode_sets_neither_app_variable" {
+  command = apply
+
+  assert {
+    condition     = !contains([for e in jsondecode(aws_ecs_task_definition.this.container_definitions)[0].environment : e.name], "SRE_GITHUB_APP_ID")
+    error_message = "the token shape sets no App variable"
+  }
+
+  assert {
+    condition     = !contains([for s in jsondecode(aws_ecs_task_definition.this.container_definitions)[0].secrets : s.name], "SRE_GITHUB_APP_PRIVATE_KEY")
+    error_message = "the token shape carries no App key"
+  }
+}
+
+run "both_github_shapes_at_once_is_refused" {
+  command = plan
+
+  variables {
+    github_app_id                     = "123456"
+    github_app_private_key_secret_arn = "arn:aws:secretsmanager:us-east-1:123456789012:secret:sre-fix-runner-app-key-QqRrSs"
+  }
+
+  expect_failures = [aws_ecs_task_definition.this]
+}
+
+run "the_app_with_the_agent_token_is_refused" {
+  command = plan
+
+  variables {
+    github_token_secret_arn           = null
+    github_app_id                     = "123456"
+    github_app_private_key_secret_arn = "arn:aws:secretsmanager:us-east-1:123456789012:secret:sre-fix-runner-app-key-QqRrSs"
+    agent_github_token_secret_arn     = "arn:aws:secretsmanager:us-east-1:123456789012:secret:agent-readonly-StUvWx"
+  }
+
+  expect_failures = [aws_ecs_task_definition.this]
+}
+
+run "neither_github_shape_is_refused" {
+  command = plan
+
+  variables {
+    github_token_secret_arn = null
+  }
+
+  expect_failures = [aws_ecs_task_definition.this]
+}
+
+run "the_app_id_without_its_key_is_refused" {
+  command = plan
+
+  variables {
+    github_token_secret_arn = null
+    github_app_id           = "123456"
+  }
+
+  expect_failures = [aws_ecs_task_definition.this]
+}
+
+run "the_app_key_without_its_id_is_refused" {
+  command = plan
+
+  variables {
+    github_token_secret_arn           = null
+    github_app_private_key_secret_arn = "arn:aws:secretsmanager:us-east-1:123456789012:secret:sre-fix-runner-app-key-QqRrSs"
+  }
+
+  expect_failures = [aws_ecs_task_definition.this]
+}
+
+run "an_app_id_that_is_not_numeric_is_refused" {
+  command = plan
+
+  variables {
+    github_token_secret_arn           = null
+    github_app_id                     = "acme-fix-bot"
+    github_app_private_key_secret_arn = "arn:aws:secretsmanager:us-east-1:123456789012:secret:sre-fix-runner-app-key-QqRrSs"
+  }
+
+  expect_failures = [var.github_app_id]
+}
+
+run "a_partial_app_key_arn_is_refused" {
+  command = plan
+
+  variables {
+    github_token_secret_arn           = null
+    github_app_id                     = "123456"
+    github_app_private_key_secret_arn = "arn:aws:secretsmanager:us-east-1:123456789012:secret:sre-fix-runner-app-key"
+  }
+
+  expect_failures = [var.github_app_private_key_secret_arn]
+}
+
+run "a_secret_in_another_region_is_refused_for_the_app_key" {
+  command = plan
+
+  variables {
+    github_token_secret_arn           = null
+    github_app_id                     = "123456"
+    github_app_private_key_secret_arn = "arn:aws:secretsmanager:eu-west-1:123456789012:secret:sre-fix-runner-app-key-QqRrSs"
+  }
+
+  expect_failures = [aws_ecs_task_definition.this]
+}
+
+run "a_pool_in_app_mode_keeps_the_pool_variables" {
+  command = apply
+
+  variables {
+    runner_count                      = 2
+    github_token_secret_arn           = null
+    github_app_id                     = "123456"
+    github_app_private_key_secret_arn = "arn:aws:secretsmanager:us-east-1:123456789012:secret:sre-fix-runner-app-key-QqRrSs"
+  }
+
+  assert {
+    condition = {
+      for e in jsondecode(aws_ecs_task_definition.this.container_definitions)[0].environment : e.name => e.value
+      if contains(["SRE_GITHUB_APP_ID", "SRE_WORKSPACE_PER_INSTANCE", "SRE_MEMORY_ROOT"], e.name)
+      } == {
+      SRE_GITHUB_APP_ID          = "123456"
+      SRE_WORKSPACE_PER_INSTANCE = "1"
+      SRE_MEMORY_ROOT            = "/workspace/memory"
+    }
+    error_message = "App mode changes nothing about the pool: the App id and both pool variables are set together"
+  }
+}
+
 ## The task role
 
 run "the_task_role_holds_the_workspace_the_memory_prefix_and_nothing_else" {
@@ -1161,6 +1336,29 @@ run "extra_environment_cannot_carry_the_agent_token" {
   }
 
   expect_failures = [var.extra_environment]
+}
+
+run "extra_environment_cannot_carry_the_app_private_key" {
+  command = plan
+
+  variables {
+    extra_environment = { SRE_GITHUB_APP_PRIVATE_KEY = "-----BEGIN RSA PRIVATE KEY-----" }
+  }
+
+  expect_failures = [var.extra_environment]
+}
+
+run "extra_environment_cannot_set_the_app_id_in_app_mode" {
+  command = plan
+
+  variables {
+    github_token_secret_arn           = null
+    github_app_id                     = "123456"
+    github_app_private_key_secret_arn = "arn:aws:secretsmanager:us-east-1:123456789012:secret:sre-fix-runner-app-key-QqRrSs"
+    extra_environment                 = { SRE_GITHUB_APP_ID = "999999" }
+  }
+
+  expect_failures = [aws_ecs_task_definition.this]
 }
 
 run "extra_environment_cannot_carry_a_provider_key" {

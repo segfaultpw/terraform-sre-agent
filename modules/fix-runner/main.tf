@@ -109,12 +109,18 @@ locals {
   }
   memory_limits = local.fargate_memory[tostring(var.cpu)]
 
+  # GitHub authentication is one shape exactly: a GitHub App (github_app_id with the key's secret)
+  # or static tokens. The refusal is on the task definition, because a variable validation cannot
+  # read another variable on every Terraform this module still takes.
+  github_app_auth = var.github_app_id != null
+
   secret_env = merge(
     {
-      SRE_API_KEY      = var.api_key_secret_arn
-      SRE_GITHUB_TOKEN = var.github_token_secret_arn
+      SRE_API_KEY = var.api_key_secret_arn
     },
+    var.github_token_secret_arn == null ? {} : { SRE_GITHUB_TOKEN = var.github_token_secret_arn },
     var.agent_github_token_secret_arn == null ? {} : { SRE_AGENT_GITHUB_TOKEN = var.agent_github_token_secret_arn },
+    var.github_app_private_key_secret_arn == null ? {} : { SRE_GITHUB_APP_PRIVATE_KEY = var.github_app_private_key_secret_arn },
     var.provider_key_secret_arns,
   )
   secret_arns = sort(distinct(values(local.secret_env)))
@@ -130,6 +136,9 @@ locals {
       AWS_REGION         = local.region
       AWS_DEFAULT_REGION = local.region
     },
+    # The App's id is not a secret, so it is plain environment; the key is a secret. In App mode
+    # neither static-token variable exists: the runner mints its tokens per request from the App.
+    local.github_app_auth ? { SRE_GITHUB_APP_ID = var.github_app_id } : {},
     # Only the exact value 1 opts in, so false is the absence of the variable.
     var.agent_aws_access ? { SRE_AGENT_AWS_ACCESS = "1" } : {},
     # The pool layout: each task works under instances/<its instance id> on the shared volume,
@@ -770,6 +779,37 @@ resource "aws_ecs_task_definition" "this" {
       # contains() with a null value raises instead of answering.
       condition     = local.expected_provider_key == null ? true : contains(keys(var.provider_key_secret_arns), local.expected_provider_key)
       error_message = "sre_model ${var.sre_model} reads its key from ${coalesce(local.expected_provider_key, "its provider's variable")}, which provider_key_secret_arns does not hold. Add it, or the agent would call the model with no key."
+    }
+
+    precondition {
+      # The App and the tokens cannot both be configured: the runner would refuse to start rather
+      # than guess, and a plan-time refusal says which variables to look at. The agent token
+      # belongs to the token shape, so it counts as that shape on its own.
+      condition = !(
+        (var.github_app_id != null || var.github_app_private_key_secret_arn != null)
+        && (var.github_token_secret_arn != null || var.agent_github_token_secret_arn != null)
+      )
+      error_message = "GitHub authentication is one shape exactly: a GitHub App (github_app_id with github_app_private_key_secret_arn) or a static token (github_token_secret_arn, which agent_github_token_secret_arn complements). Both shapes are set, so the runner could not tell which to use; remove one."
+    }
+
+    precondition {
+      condition = (
+        var.github_app_id != null || var.github_app_private_key_secret_arn != null || var.github_token_secret_arn != null
+      )
+      error_message = "GitHub authentication is one shape exactly: a GitHub App (github_app_id with github_app_private_key_secret_arn) or a static token (github_token_secret_arn, which agent_github_token_secret_arn complements). github_token_secret_arn is unset and no App is configured, so the runner could not reach GitHub at all."
+    }
+
+    precondition {
+      condition = (
+        var.github_app_id == null && var.github_app_private_key_secret_arn == null
+      ) || (var.github_app_id != null && var.github_app_private_key_secret_arn != null)
+      error_message = "App authentication is github_app_id and github_app_private_key_secret_arn together: the id tells the runner which App it is and the key's secret is what it signs each token with. Set both, or use the static-token shape instead."
+    }
+
+    precondition {
+      # merge() would silently drop this name from extra_environment, as with the pool variables.
+      condition     = local.github_app_auth ? !contains(keys(var.extra_environment), "SRE_GITHUB_APP_ID") : true
+      error_message = "With a GitHub App this module sets SRE_GITHUB_APP_ID itself from github_app_id, so extra_environment cannot carry it."
     }
 
     precondition {

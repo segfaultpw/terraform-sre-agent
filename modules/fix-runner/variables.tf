@@ -42,12 +42,12 @@ variable "image" {
     The runner image, pinned by digest: ghcr.io/segfaultpw/sre-agent-opencode-runner@sha256:<64 hex>
     (a name:tag@sha256:... reference is accepted, and the digest decides). A tag is refused because
     it can move under a service that has no one watching it. The default is the sre-agent-opencode
-    v1.6.0 runner this module version was built against (a multi-architecture index); null means
+    v1.7.0 runner this module version was built against (a multi-architecture index); null means
     the default. Override it with the digest of another release, from
     https://github.com/segfaultpw/sre-agent-opencode/pkgs/container/sre-agent-opencode-runner, or of
     your own image derived from it (see "Adding what a repository needs" in the README).
   EOT
-  default     = "ghcr.io/segfaultpw/sre-agent-opencode-runner@sha256:8f476837c96f52eaec5b28fc9350313f65c4755cce75bb155e08cab9fe440e18"
+  default     = "ghcr.io/segfaultpw/sre-agent-opencode-runner@sha256:f18cd90c22282f96bed99fec63d53f0fbdde8e8ccb8f019a02d72c63148cfad4"
   nullable    = false
 
   validation {
@@ -149,11 +149,52 @@ variable "github_token_secret_arn" {
     and open a pull request in the repositories this runner is asked to fix (contents and pull
     requests, write). It becomes SRE_GITHUB_TOKEN. The runner publishes with it. Unless
     agent_github_token_secret_arn is set, the agent holds it too, to clone private repositories.
+    This is the static-token shape of the module's GitHub authentication; the other shape is a
+    GitHub App (github_app_id with github_app_private_key_secret_arn), and exactly one shape is
+    allowed: both together and neither at all are refused.
   EOT
+  default     = null
 
   validation {
-    condition     = can(regex("^arn:aws[a-z-]*:secretsmanager:[a-z0-9-]+:[0-9]{12}:secret:[A-Za-z0-9/_+=.@-]+-[A-Za-z0-9]{6}$", var.github_token_secret_arn))
+    condition     = var.github_token_secret_arn == null ? true : can(regex("^arn:aws[a-z-]*:secretsmanager:[a-z0-9-]+:[0-9]{12}:secret:[A-Za-z0-9/_+=.@-]+-[A-Za-z0-9]{6}$", var.github_token_secret_arn))
     error_message = "github_token_secret_arn must be the full Secrets Manager secret ARN, including the six-character suffix."
+  }
+}
+
+variable "github_app_id" {
+  type        = string
+  description = <<-EOT
+    The numeric id of a GitHub App, as a string of digits (the App's About page shows it). With
+    github_app_private_key_secret_arn it selects App mode: the task definition sets SRE_GITHUB_APP_ID
+    from it and injects the App's private key as SRE_GITHUB_APP_PRIVATE_KEY, and neither
+    SRE_GITHUB_TOKEN nor SRE_AGENT_GITHUB_TOKEN exists, because the runner mints a short-lived
+    installation token for each request instead (its own to push, the agent's read-only on the
+    request's repository). Exactly one GitHub shape is allowed: this pair, or
+    github_token_secret_arn with its optional agent counterpart, never both and never neither.
+    App mode needs the sre-agent-opencode v1.7.0 runner image or newer.
+  EOT
+  default     = null
+
+  validation {
+    condition     = var.github_app_id == null ? true : can(regex("^[0-9]+$", var.github_app_id))
+    error_message = "github_app_id must be the App's numeric id as digits, for example 1234567 (the App's About page shows it)."
+  }
+}
+
+variable "github_app_private_key_secret_arn" {
+  type        = string
+  description = <<-EOT
+    The full ARN of a Secrets Manager secret whose value is the GitHub App's private key, the PEM
+    exactly as the .pem file GitHub lets you download: the newlines are part of it and the runner
+    tolerates them, so no base64 or escaping is needed (only surrounding whitespace is trimmed).
+    It becomes SRE_GITHUB_APP_PRIVATE_KEY, a secret never printed and never in the agent's
+    environment. Set it together with github_app_id; see that variable for the one-shape rule.
+  EOT
+  default     = null
+
+  validation {
+    condition     = var.github_app_private_key_secret_arn == null ? true : can(regex("^arn:aws[a-z-]*:secretsmanager:[a-z0-9-]+:[0-9]{12}:secret:[A-Za-z0-9/_+=.@-]+-[A-Za-z0-9]{6}$", var.github_app_private_key_secret_arn))
+    error_message = "github_app_private_key_secret_arn must be the full Secrets Manager secret ARN, including the six-character suffix."
   }
 }
 
@@ -166,7 +207,9 @@ variable "agent_github_token_secret_arn" {
     and opens the pull request with the github_token_secret_arn token. Null (the default) omits the
     variable, and the agent then holds the runner's own token, which can push, so only the
     command fence on git push stands between the agent and a push. That default is the owner's
-    choice to make and to reverse by setting this.
+    choice to make and to reverse by setting this. It belongs to the static-token shape: in App
+    mode (github_app_id with github_app_private_key_secret_arn) it is refused, because there the
+    agent's token is minted per run from the App, read-only on the request's repository.
   EOT
   default     = null
 
@@ -274,7 +317,10 @@ variable "extra_environment" {
     TOKEN, SECRET, PASS, AUTH, PRIVATE, CREDENTIAL, DSN, DATABASE_URL or CONNECTION_STRING) is
     refused, and so is any variable this module sets itself or carries as a secret, and SRE_ONCE,
     which would make the runner exit after one poll. SRE_RUNNER_SETUP must be an absolute path in
-    the image, never under /workspace, which the agent can write. With runner_count above 1,
+    the image, never under /workspace, which the agent can write. With a GitHub App
+    (github_app_id set) SRE_GITHUB_APP_ID is the module's own as well and is refused (it sets it
+    from github_app_id); SRE_GITHUB_APP_PRIVATE_KEY is refused in every mode, because its name is
+    credential-shaped. With runner_count above 1,
     SRE_WORKSPACE_PER_INSTANCE and SRE_MEMORY_ROOT are the module's own as well and are refused
     (it sets both for the pool), and so is SRE_RUNNER_INSTANCE, because each task names itself
     by its hostname and one shared identity would make the pool's locks name one instance;

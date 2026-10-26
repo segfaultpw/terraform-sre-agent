@@ -96,7 +96,9 @@ network setting is not enforced on a verifier you run. See [`modules/verifier`](
 
 [`fix-runner`](modules/fix-runner) runs SRE Agent's self-hosted fix runner in your account: one
 Fargate task that polls SRE Agent over outbound HTTPS, answers fix requests with your model key and
-opens the pull request with your GitHub token, so **SRE Agent never connects to your account**. Its
+opens the pull request with your GitHub credentials, a GitHub App (short-lived installation tokens
+minted per request, the agent's read-only on the one repository) or a static token, so **SRE Agent
+never connects to your account**. Its
 workspace is an encrypted EFS volume, so clones, installed tools and the agent's notes survive a
 replaced task, and the notes are mirrored one way to an S3 bucket you own. The agent runs as a
 second Linux account with no AWS access unless you set `agent_aws_access`; the image is pinned by
