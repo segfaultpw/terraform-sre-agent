@@ -8,6 +8,30 @@ than a `terraform apply`.
 - **minor**: a permission added, because the product gained a feature needing it
 - **patch**: documentation, validation, formatting; no change to what is granted
 
+## [4.4.0]
+
+The `fix-runner` module can run the self-hosted fix runner with a **GitHub App** instead of static
+tokens: the runner holds the App's id and private key and mints a short-lived installation token
+for each request (its own to clone and push, a second for the agent that is `contents` read-only on
+the request's repository alone), so no long-lived GitHub credential sits in the task at all.
+
+### Added
+- `fix-runner`: `github_app_id` and `github_app_private_key_secret_arn` select App mode. The task
+  definition sets `SRE_GITHUB_APP_ID` as a plain value (the id is not a secret) and injects
+  `SRE_GITHUB_APP_PRIVATE_KEY` from the secret; in that mode neither `SRE_GITHUB_TOKEN` nor
+  `SRE_AGENT_GITHUB_TOKEN` exists. GitHub authentication is one shape exactly: this pair, or
+  `github_token_secret_arn` (which `agent_github_token_secret_arn` complements); both together and
+  neither at all are refused at plan time, as is the App's id without its key and the key without
+  its id. The secret's value is the private key PEM exactly as the `.pem` file GitHub lets you
+  download, newlines and all; the runner needs no encoding. App mode needs the `sre-agent-opencode`
+  **v1.7.0** runner image or newer; pass its digest as `image` when the default is older.
+- `fix-runner`: `extra_environment` refuses `SRE_GITHUB_APP_ID` in App mode (the module sets it),
+  and `SRE_GITHUB_APP_PRIVATE_KEY` is refused in every mode as a credential-shaped name. The App's
+  private key never enters the agent's environment, and the agent's GitHub token in App mode is
+  minted per run and cannot push.
+
+Nothing existing changes in the token shape: the module plans exactly what it did in 4.3.1.
+
 ## [4.3.1]
 
 ### Fixed

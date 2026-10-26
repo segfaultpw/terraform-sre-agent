@@ -55,6 +55,28 @@ The self-hosted fix runner is a plan feature (`self_hosted_fix_runner`).
      fixes (contents and pull requests, write);
    - your model provider's API key.
 
+   **A GitHub App instead of a token.** GitHub authentication has two shapes, and you configure
+   exactly one: a GitHub App (`github_app_id` with `github_app_private_key_secret_arn`), or the
+   static token above (`github_token_secret_arn`, with `agent_github_token_secret_arn` for the
+   agent's own). Both at once and neither at all are refused. With an App the runner holds no
+   long-lived GitHub credential: it signs a short-lived JWT with the App's private key and mints
+   an installation token for each request, its own to clone and push, and a second for the agent
+   that is `contents` read-only on the request's repository alone. The secret's value is the
+   private key PEM exactly as the `.pem` file GitHub lets you download, newlines and all: the
+   runner tolerates them, so there is no base64 and no escaping, and because the value is a file
+   already on your disk you create that one secret from the file itself.
+
+   ```sh
+   umask 077
+   cp ~/Downloads/private-key.pem key.pem
+   aws secretsmanager create-secret --name sre-fix-runner-app-key --secret-string file://key.pem
+   rm key.pem
+   ```
+
+   `github_app_id` is the App's numeric id from its About page, and it is not a secret: the task
+   definition carries it as a plain value while the key is injected from the secret. App mode
+   needs the runner image **v1.7.0** or newer; pass its digest as `image` on an older default.
+
    Create them in the Region you deploy to: the module refuses a secret in another Region. The
    module needs each secret's **full ARN, with its six-character suffix**, which `create-secret`
    prints and
@@ -88,6 +110,10 @@ module "sre_agent_fix_runner" {
   provider_key_secret_arns = {
     OPENROUTER_API_KEY = data.aws_secretsmanager_secret.openrouter.arn
   }
+
+  # Or the App shape instead of the token, never both:
+  # github_app_id                      = "1234567"
+  # github_app_private_key_secret_arn = data.aws_secretsmanager_secret.github_app_key.arn
 }
 ```
 
@@ -257,7 +283,8 @@ Read this before you grant the task role anything. The agent has a shell, and wh
 machine you put it on, not a list of denied commands.
 
 **What the separate account and the environment scrub stop.** The runner removes its poll key, the
-repository token and, unless you set `agent_aws_access`, the `AWS_*` and ECS container credential
+repository token, the GitHub App's id and private key and, unless you set `agent_aws_access`, the
+`AWS_*` and ECS container credential
 variables from the environment it starts the agent in, and the agent runs as a different account
 from the runner. So the agent cannot read the runner's process environment (`/proc/<pid>/environ`
 refuses another account), the runner's git and `gh` state, the memory directory, another
@@ -280,12 +307,15 @@ cannot install system packages; and it has no AWS credentials unless you opt in.
   pattern describes. **Set `agent_github_token_secret_arn` to a fine-grained token with Contents
   read-only** and the token stops the push as well: the agent can clone and read, the runner still
   pushes the branch and opens the pull request. Left unset, the agent holds the runner's token,
-  which the owner of the deployment chooses and can reverse by setting it.
+  which the owner of the deployment chooses and can reverse by setting it. With a GitHub App none
+  of this is a choice to make: the agent's token is minted per run, `contents` read-only on the
+  request's repository, so it can clone and read but never push, and neither the App's id nor its
+  private key ever enters the agent's environment.
 - **Files any account may read** in the image, and the repositories' own code and test scripts,
   which run as the agent.
 - **A setup script.** If you set `SRE_RUNNER_SETUP` (below) it runs as root, before the first poll,
   with an allowlisted environment (`PATH`, the locale and time zone, the proxy variables and your
-  own `SRE_SETUP_*` variables): the poll key, both GitHub tokens, the model key and the task role's
+  own `SRE_SETUP_*` variables): the poll key, the GitHub tokens, the App's key, the model key and the task role's
   credential variables are not in it. It is root in the container, so it is as trusted as the
   image itself. It is yours; keep it short and idempotent.
 
@@ -348,7 +378,9 @@ CLI, `kubectl` and `mise`). Three ways to add more, in the order to try them:
 credential: a name containing `KEY`, `TOKEN`, `SECRET`, `PASS`, `AUTH`, `PRIVATE`, `CREDENTIAL`,
 `DSN`, `DATABASE_URL` or `CONNECTION_STRING` is refused, and so is any variable this module sets
 itself or carries as a secret, and `SRE_ONCE` (the runner would exit after one poll and ECS would
-restart it in a loop). With `runner_count` above 1 that includes `SRE_WORKSPACE_PER_INSTANCE` and
+restart it in a loop). With a GitHub App that includes `SRE_GITHUB_APP_ID`, which the module sets
+from `github_app_id` (`SRE_GITHUB_APP_PRIVATE_KEY` is refused in every mode by the credential
+rule). With `runner_count` above 1 that includes `SRE_WORKSPACE_PER_INSTANCE` and
 `SRE_MEMORY_ROOT`, which the module sets for the pool; at 1 they are yours, so a single task can
 still opt into the split workspace on its own.
 Also refused: `PATH`, `HOME`, `ENV`, `BASH_ENV`, `NODE_OPTIONS`,
@@ -366,11 +398,13 @@ as root at the next start.
 |---|---|---|
 | `sre_agent_url` | required | Your SRE Agent origin, an https URL with no path. Becomes `SRE_SERVER_URL`. |
 | `sre_model` | required | `provider/model`, for example `openrouter/deepseek/deepseek-v4-pro`. Becomes `SRE_MODEL`. |
-| `image` | the v1.5.0 runner, by digest | The runner image pinned by digest. A tag is refused; null keeps the default. |
+| `image` | the v1.6.0 runner, by digest | The runner image pinned by digest. A tag is refused; null keeps the default. |
 | `api_key_secret_arn` | required | Full ARN of the secret holding the `fix_runner:poll` API key. Becomes `SRE_API_KEY`. |
-| `github_token_secret_arn` | required | Full ARN of the secret holding the token the runner publishes with. Becomes `SRE_GITHUB_TOKEN`. |
+| `github_app_id` | `null` | The numeric id of a GitHub App. With `github_app_private_key_secret_arn` it selects App mode: the task definition sets `SRE_GITHUB_APP_ID` plain and the runner mints short-lived installation tokens per request. Needs the runner image v1.7.0 or newer. |
+| `github_app_private_key_secret_arn` | `null` | Full ARN of the secret holding the App's private key PEM (the `.pem` file as downloaded). Becomes `SRE_GITHUB_APP_PRIVATE_KEY`. |
+| `github_token_secret_arn` | required in the token shape | Full ARN of the secret holding the token the runner publishes with. Becomes `SRE_GITHUB_TOKEN`. One GitHub shape exactly: this (with its agent counterpart) or the App pair above; both together and neither at all are refused. |
 | `provider_key_secret_arns` | required | Environment variable name to the full ARN of the provider's key secret, for example `OPENROUTER_API_KEY`. For a provider the package maps, the key `sre_model` needs must be present. |
-| `agent_github_token_secret_arn` | `null` | A read-only token for the agent alone (`SRE_AGENT_GITHUB_TOKEN`). Null omits it, and the agent holds the runner's token. |
+| `agent_github_token_secret_arn` | `null` | A read-only token for the agent alone (`SRE_AGENT_GITHUB_TOKEN`), in the token shape only. Null omits it, and the agent holds the runner's token. |
 | `secrets_kms_key_arn` | `null` | The customer-managed key behind the secrets, so the execution role may decrypt them through Secrets Manager. Every secret must be in the deploy Region. |
 | `agent_aws_access` | `false` | `true` sets `SRE_AGENT_AWS_ACCESS=1`: the agent holds the task role. |
 | `extra_policy_arns` | `[]` | Policies attached to the task role. Nothing else is. The ARN of a policy created in the same configuration works on the first apply; a policy listed twice is refused. |
@@ -416,7 +450,7 @@ as root at the next start.
 - **Requests:** the Control Tower drawer and the card show each request's report, with the memory
   changes listed.
 - **The log group:** every poll, request, refusal and redacted error the runner logs. The poll key,
-  the repository token and the handoff token are replaced with `[redacted]` in every line.
+  the repository token, the App's key and the handoff token are replaced with `[redacted]` in every line.
 - **The notes themselves:** `aws s3 ls s3://<memory_bucket_name>/<memory_prefix> --recursive`, and
   the versions of any file with `aws s3api list-object-versions`; or on the volume, through a task
   that mounts the same access point.

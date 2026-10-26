@@ -16,7 +16,7 @@ variable "sre_model" {
 
 variable "image" {
   type        = string
-  description = "A runner image pinned by digest, to replace the module's default (the v1.5.0 runner). Null keeps the default."
+  description = "A runner image pinned by digest, to replace the module's default (the v1.6.0 runner). Null keeps the default."
   default     = null
 }
 
@@ -33,7 +33,20 @@ variable "api_key_secret_arn" {
 
 variable "github_token_secret_arn" {
   type        = string
-  description = "The full ARN of the secret that holds the GitHub token the runner publishes with."
+  description = "The full ARN of the secret that holds the GitHub token the runner publishes with. Null when you use the GitHub App shape instead."
+  default     = null
+}
+
+variable "github_app_id" {
+  type        = string
+  description = "The numeric id of your GitHub App, when the runner authenticates with an App instead of a static token. Null uses the token."
+  default     = null
+}
+
+variable "github_app_private_key_secret_arn" {
+  type        = string
+  description = "The full ARN of the secret that holds the App's private key PEM, the .pem file as downloaded from GitHub. Set it together with github_app_id."
+  default     = null
 }
 
 variable "provider_key_variable" {
