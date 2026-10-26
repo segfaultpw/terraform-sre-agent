@@ -42,12 +42,12 @@ variable "image" {
     The runner image, pinned by digest: ghcr.io/segfaultpw/sre-agent-opencode-runner@sha256:<64 hex>
     (a name:tag@sha256:... reference is accepted, and the digest decides). A tag is refused because
     it can move under a service that has no one watching it. The default is the sre-agent-opencode
-    v1.5.0 runner this module version was built against (a multi-architecture index); null means
+    v1.6.0 runner this module version was built against (a multi-architecture index); null means
     the default. Override it with the digest of another release, from
     https://github.com/segfaultpw/sre-agent-opencode/pkgs/container/sre-agent-opencode-runner, or of
     your own image derived from it (see "Adding what a repository needs" in the README).
   EOT
-  default     = "ghcr.io/segfaultpw/sre-agent-opencode-runner@sha256:ef95a56a8ae2763e7c9b1a98e261443a4489ca78ba449d47331f3d7a163b1b52"
+  default     = "ghcr.io/segfaultpw/sre-agent-opencode-runner@sha256:8f476837c96f52eaec5b28fc9350313f65c4755cce75bb155e08cab9fe440e18"
   nullable    = false
 
   validation {
@@ -276,8 +276,9 @@ variable "extra_environment" {
     which would make the runner exit after one poll. SRE_RUNNER_SETUP must be an absolute path in
     the image, never under /workspace, which the agent can write. With runner_count above 1,
     SRE_WORKSPACE_PER_INSTANCE and SRE_MEMORY_ROOT are the module's own as well and are refused
-    (it sets both for the pool); at 1 they are yours, so a single task can still opt into the
-    split workspace on its own.
+    (it sets both for the pool), and so is SRE_RUNNER_INSTANCE, because each task names itself
+    by its hostname and one shared identity would make the pool's locks name one instance;
+    at 1 they are yours, so a single task can still opt into the split workspace on its own.
     Also refused are the names that move the boundary between the runner and the agent: PATH, HOME,
     ENV, BASH_ENV, NODE_OPTIONS, NODE_PATH, SRE_RUNNER_USER, SRE_AGENT_USER, and any name that
     starts with LD_, GIT_ or OPENCODE_.

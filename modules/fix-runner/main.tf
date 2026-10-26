@@ -777,11 +777,21 @@ resource "aws_ecs_task_definition" "this" {
       # takes (cross-variable validation needs 1.9), so the refusal lives here. Above one task
       # the module sets both names for the pool, and merge() would silently drop a value from
       # extra_environment; at one task they are the operator's to set.
+      # SRE_RUNNER_INSTANCE is refused with them: in a pool the runner names
+      # itself by its hostname (every Fargate task's differs), and one shared
+      # identity would make every lock in the pool name one instance, so the
+      # liveness check could not tell one task's work from another's.
+      # The pool also cannot start on an image that cannot lease: the default
+      # image is the v1.6.0 runner, and an explicit older digest is refused
+      # rather than silently running a pool with no leases and one memory
+      # tree.
       condition = var.runner_count > 1 ? (
         !contains(keys(var.extra_environment), "SRE_WORKSPACE_PER_INSTANCE")
         && !contains(keys(var.extra_environment), "SRE_MEMORY_ROOT")
+        && !contains(keys(var.extra_environment), "SRE_RUNNER_INSTANCE")
+        && var.image != "ghcr.io/segfaultpw/sre-agent-opencode-runner@sha256:ef95a56a8ae2763e7c9b1a98e261443a4489ca78ba449d47331f3d7a163b1b52"
       ) : true
-      error_message = "With runner_count above 1 this module sets SRE_WORKSPACE_PER_INSTANCE and SRE_MEMORY_ROOT itself (the pool's workspace split and the one shared memory tree), so extra_environment cannot carry them; at runner_count 1 they are yours."
+      error_message = "With runner_count above 1 this module sets SRE_WORKSPACE_PER_INSTANCE and SRE_MEMORY_ROOT itself (the pool's workspace split and the one shared memory tree), extra_environment cannot carry them or SRE_RUNNER_INSTANCE (each task names itself by its hostname), and the image must be the v1.6.0 runner or newer: an older image sends no instance id, so two tasks would be one runner to the queue and every job twice."
     }
   }
 }

@@ -308,7 +308,7 @@ run "the_default_image_is_the_v1_5_0_runner_by_digest" {
   }
 
   assert {
-    condition     = jsondecode(aws_ecs_task_definition.this.container_definitions)[0].image == "ghcr.io/segfaultpw/sre-agent-opencode-runner@sha256:ef95a56a8ae2763e7c9b1a98e261443a4489ca78ba449d47331f3d7a163b1b52"
+    condition     = jsondecode(aws_ecs_task_definition.this.container_definitions)[0].image == "ghcr.io/segfaultpw/sre-agent-opencode-runner@sha256:8f476837c96f52eaec5b28fc9350313f65c4755cce75bb155e08cab9fe440e18"
     error_message = "null means the default, the v1.5.0 runner pinned by its multi-architecture digest"
   }
 }
@@ -1035,6 +1035,42 @@ run "extra_environment_cannot_set_the_pool_memory_root_in_a_pool" {
   }
 
   expect_failures = [aws_ecs_task_definition.this]
+}
+
+run "extra_environment_cannot_set_one_shared_identity_in_a_pool" {
+  command = plan
+
+  variables {
+    runner_count      = 2
+    extra_environment = { SRE_RUNNER_INSTANCE = "shared" }
+  }
+
+  expect_failures = [aws_ecs_task_definition.this]
+}
+
+run "a_pool_refuses_the_image_that_cannot_lease" {
+  command = plan
+
+  variables {
+    runner_count = 2
+    image        = "ghcr.io/segfaultpw/sre-agent-opencode-runner@sha256:ef95a56a8ae2763e7c9b1a98e261443a4489ca78ba449d47331f3d7a163b1b52"
+  }
+
+  expect_failures = [aws_ecs_task_definition.this]
+}
+
+run "a_pool_accepts_an_image_the_module_does_not_know" {
+  command = plan
+
+  variables {
+    runner_count = 2
+    image        = "ghcr.io/segfaultpw/sre-agent-opencode-runner@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  }
+
+  assert {
+    condition     = jsondecode(aws_ecs_task_definition.this.container_definitions)[0].image == "ghcr.io/segfaultpw/sre-agent-opencode-runner@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    error_message = "a pool accepts an explicit image digest other than the lease-incapable v1.5.0 one; the operator vouches for it"
+  }
 }
 
 run "at_one_task_the_pool_variables_stay_the_operator_s" {
