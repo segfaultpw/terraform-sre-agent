@@ -8,6 +8,20 @@ than a `terraform apply`.
 - **minor**: a permission added, because the product gained a feature needing it
 - **patch**: documentation, validation, formatting; no change to what is granted
 
+## [4.5.0]
+
+The `fix-runner` module runs the **v1.8.0** runner image: opencode's own server log is forwarded
+into the runner's log group (every line prefixed `opencode:`, redacted and bounded), and every
+process the runner starts carries a `PWD` matching its working directory, so the agent session
+roots at the repository checkout instead of the container's workspace.
+
+### Changed
+- `fix-runner`: the default `image` is the `sre-agent-opencode` v1.8.0 multi-architecture index,
+  pinned by digest
+  (`ghcr.io/segfaultpw/sre-agent-opencode-runner@sha256:1eb3de2c27ea8eb35e5bb6d845ed626924d897d8565cac9779ad7c6cf12f0c60`);
+  the v1.8.0 image is required for the log forwarding and the working-directory fix. No permission
+  or variable changes.
+
 ## [4.4.0]
 
 The `fix-runner` module can run the self-hosted fix runner with a **GitHub App** instead of static
