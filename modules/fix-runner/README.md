@@ -188,6 +188,16 @@ Integrations card says **Polling now**, **Not polling**, **Never polled** or **S
 runner that cannot start (a missing value, a missing tool) says why on the first lines of the log
 group and exits, and ECS retries; after repeated failures the circuit breaker fails the deployment.
 
+## opencode's own log
+
+The agent's opencode runs with its server log switched on, and when the process ends, however it
+ended, the runner forwards that log's tail to the same log group: filter the group on `opencode:`
+and the lines are there, redacted the way every runner line is and bounded (at most the last 200
+lines, each cut at 2,000 characters; a line that is not valid UTF-8 is dropped and counted). A
+failed run's report names how many lines were forwarded. Set `SRE_OPENCODE_LOG_LEVEL` (through
+`extra_environment`) when a model step needs a chattier server log; unset, opencode keeps its own
+default.
+
 ## Persistence and memory
 
 `/workspace` is the EFS volume, so what the runner keeps survives a replaced task:
