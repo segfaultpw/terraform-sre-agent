@@ -8,6 +8,18 @@ than a `terraform apply`.
 - **minor**: a permission added, because the product gained a feature needing it
 - **patch**: documentation, validation, formatting; no change to what is granted
 
+## [4.7.0]
+
+The `fix-runner` module runs the **v2.0.0** runner image. The runner works as in v1.9.0; the
+major moves because `sre-agent-opencode` v2.0.0 removed its GitHub Actions workflow, which this
+module never used. Runner images pin by digest, so nothing you pull changes besides the image.
+
+### Changed
+- `fix-runner`: the default `image` is the `sre-agent-opencode` v2.0.0 multi-architecture index,
+  pinned by digest
+  (`ghcr.io/segfaultpw/sre-agent-opencode-runner@sha256:ad2f4380d5795f27db4c836e3b3258fc28ad4442bf5491903926ba59a60b4229`).
+  No permission or variable changes.
+
 ## [4.6.0]
 
 The `fix-runner` module runs the **v1.9.0** runner image: under the account split (the container

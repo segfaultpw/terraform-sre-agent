@@ -308,7 +308,7 @@ run "the_default_image_is_the_current_runner_by_digest" {
   }
 
   assert {
-    condition     = jsondecode(aws_ecs_task_definition.this.container_definitions)[0].image == "ghcr.io/segfaultpw/sre-agent-opencode-runner@sha256:d210915fdd95204ff9d8f8e0562c31fd66d267bf5945cf2ff20df122912c6088"
+    condition     = jsondecode(aws_ecs_task_definition.this.container_definitions)[0].image == "ghcr.io/segfaultpw/sre-agent-opencode-runner@sha256:ad2f4380d5795f27db4c836e3b3258fc28ad4442bf5491903926ba59a60b4229"
     error_message = "null means the default, the current runner pinned by its multi-architecture digest"
   }
 }
