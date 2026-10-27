@@ -8,6 +8,19 @@ than a `terraform apply`.
 - **minor**: a permission added, because the product gained a feature needing it
 - **patch**: documentation, validation, formatting; no change to what is granted
 
+## [4.6.0]
+
+The `fix-runner` module runs the **v1.9.0** runner image: under the account split (the container
+model, a root runner) the pull request step works end to end, because the pull request body
+is the runner account's own file; the commit subject and the pull request title come from the
+request when SRE Agent sends one; and "Run a test job" checks the pull request step too.
+
+### Changed
+- `fix-runner`: the default `image` is the `sre-agent-opencode` v1.9.0 multi-architecture index,
+  pinned by digest
+  (`ghcr.io/segfaultpw/sre-agent-opencode-runner@sha256:d210915fdd95204ff9d8f8e0562c31fd66d267bf5945cf2ff20df122912c6088`).
+  No permission or variable changes.
+
 ## [4.5.0]
 
 The `fix-runner` module runs the **v1.8.0** runner image: opencode's own server log is forwarded
