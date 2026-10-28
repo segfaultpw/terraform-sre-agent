@@ -8,6 +8,27 @@ than a `terraform apply`.
 - **minor**: a permission added, because the product gained a feature needing it
 - **patch**: documentation, validation, formatting; no change to what is granted
 
+## [4.9.0]
+
+The `fix-runner` module runs the **v2.2.0** runner image. While a runner works on a request it
+reports in every minute, so when a runner stops, crashes or loses its network, SRE Agent moves the
+request on within minutes: to another of your runners, then to SRE Agent's own runner when the
+repository allows it, instead of waiting out a long timeout. A failed run also tells SRE Agent what
+went wrong, so the request says it in a plain sentence.
+
+### Security
+- The runner applies its protected paths rule to a changed file whose name holds a non-ASCII or
+  special character. Older runners read such a name quoted, so a workflow file named that way under
+  `.github/` passed the rule; that mattered only when the runner's GitHub credential may write
+  workflows (an `SRE_GITHUB_TOKEN` with the `workflow` scope, or an App installation granted
+  Workflows). Upgrade to this release.
+
+### Changed
+- `fix-runner`: the default `image` is the `sre-agent-opencode` v2.2.0 multi-architecture index,
+  pinned by digest
+  (`ghcr.io/segfaultpw/sre-agent-opencode-runner@sha256:b6a70ef638a64ddddfa660d5d2224f0004cef4a622d13552bb1ab3e75e4f90eb`).
+  No permission or variable changes.
+
 ## [4.8.0]
 
 The `fix-runner` module runs the **v2.1.0** runner image: the pull request title and the commit
