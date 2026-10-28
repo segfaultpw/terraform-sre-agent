@@ -8,6 +8,18 @@ than a `terraform apply`.
 - **minor**: a permission added, because the product gained a feature needing it
 - **patch**: documentation, validation, formatting; no change to what is granted
 
+## [4.8.0]
+
+The `fix-runner` module runs the **v2.1.0** runner image: the pull request title and the commit
+headline are a Conventional Commits header of at most 72 characters, cut at a word: the title the
+request names when it names one, else the agent's own valid title, else the one SRE Agent sends.
+
+### Changed
+- `fix-runner`: the default `image` is the `sre-agent-opencode` v2.1.0 multi-architecture index,
+  pinned by digest
+  (`ghcr.io/segfaultpw/sre-agent-opencode-runner@sha256:3f13c22f54cdbc5933580e303d60637e9f625c5af55ce598b1c22bb5257ec76b`).
+  No permission or variable changes.
+
 ## [4.7.0]
 
 The `fix-runner` module runs the **v2.0.0** runner image. The runner works as in v1.9.0; the

@@ -89,8 +89,8 @@ The self-hosted fix runner is a plan feature (`self_hosted_fix_runner`).
    except when the secret's own name ends in a hyphen and six letters or digits (a secret called
    `sre-fix-runner-github`): the module cannot tell such a name from a real suffix, so copy the ARN
    from `create-secret` or `describe-secret`, never build it from the name.
-3. Apply the module. The image defaults to the `sre-agent-opencode` v2.0.0 runner pinned by its
-   multi-architecture digest (`ghcr.io/segfaultpw/sre-agent-opencode-runner@sha256:ad2f4380d5795f27db4c836e3b3258fc28ad4442bf5491903926ba59a60b4229`), and `image` replaces it with another digest; a tag is
+3. Apply the module. The image defaults to the `sre-agent-opencode` v2.1.0 runner pinned by its
+   multi-architecture digest (`ghcr.io/segfaultpw/sre-agent-opencode-runner@sha256:3f13c22f54cdbc5933580e303d60637e9f625c5af55ce598b1c22bb5257ec76b`), and `image` replaces it with another digest; a tag is
    refused. Two keys of the image matter: one older than v1.7.0 knows no App authentication, and one older than v1.6.0 no leases and no workspace
    split, so a `runner_count` above one needs this default (or a newer digest), and one older
    than v1.5.0 ignores `SRE_MEMORY_BUCKET` and `SRE_MEMORY_PREFIX`, so the notes then stay on the
