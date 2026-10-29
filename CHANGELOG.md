@@ -8,6 +8,19 @@ than a `terraform apply`.
 - **minor**: a permission added, because the product gained a feature needing it
 - **patch**: documentation, validation, formatting; no change to what is granted
 
+## [4.10.0]
+
+The `fix-runner` module runs the **v2.3.0** runner image: a fix pull request opens ready for review
+or as a draft as the draft setting of your GitHub integration in SRE Agent says (and a repository's
+own override, when it has one), instead of always as a draft. A change that touches CI
+configuration still opens as a draft, and its body says why.
+
+### Changed
+- `fix-runner`: the default `image` is the `sre-agent-opencode` v2.3.0 multi-architecture index,
+  pinned by digest
+  (`ghcr.io/segfaultpw/sre-agent-opencode-runner@sha256:36a476c4ff1fcee7215653c83e9e5098af1b0d790e475dd48842e74b4aa0aeeb`).
+  No permission or variable changes.
+
 ## [4.9.0]
 
 The `fix-runner` module runs the **v2.2.0** runner image. While a runner works on a request it
