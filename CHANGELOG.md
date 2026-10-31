@@ -8,6 +8,21 @@ than a `terraform apply`.
 - **minor**: a permission added, because the product gained a feature needing it
 - **patch**: documentation, validation, formatting; no change to what is granted
 
+## [4.11.0]
+
+The `fix-runner` module runs the **v2.4.0** runner image: a change asked for on an open pull
+request (a comment on the pull request, a request from Slack or a card, or SRE Agent revising its
+own pull request) of a repository set to your runner is made by your runner. It pushes one commit
+onto the pull request's own branch, never forced, or opens the replacement pull request SRE Agent
+decides, closing the old one, with the runner's existing GitHub credential. Until SRE Agent ships
+the release that hands these changes out, the runner behaves exactly as v2.3.0.
+
+### Changed
+- `fix-runner`: the default `image` is the `sre-agent-opencode` v2.4.0 multi-architecture index,
+  pinned by digest
+  (`ghcr.io/segfaultpw/sre-agent-opencode-runner@sha256:251e5673234e09e1c6efbe3ca3104e0fec6dd0a9fe54ea0e1743fca2bf05fac9`).
+  No permission or variable changes.
+
 ## [4.10.0]
 
 The `fix-runner` module runs the **v2.3.0** runner image: a fix pull request opens ready for review
