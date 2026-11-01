@@ -30,7 +30,7 @@ permissions:
 jobs:
   release:
     name: Tag and release
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_X64 || 'blacksmith-4vcpu-ubuntu-2404' }}
     if: github.event.workflow_run.conclusion == 'success'
     steps:
       - uses: actions/checkout@v7

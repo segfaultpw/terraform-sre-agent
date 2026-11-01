@@ -7,7 +7,7 @@ on:
 
 jobs:
   validate:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_X64 || 'blacksmith-4vcpu-ubuntu-2404' }}
     steps:
       - uses: actions/checkout@v7
 
@@ -45,7 +45,7 @@ jobs:
   # The verifier module's poller is code that runs in a customer's account, and its task role is
   # the one thing that must stay empty: the repository's own code runs as it.
   verifier:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_X64 || 'blacksmith-4vcpu-ubuntu-2404' }}
     steps:
       - uses: actions/checkout@v7
 
@@ -84,7 +84,7 @@ jobs:
   # would each break one of those. modules/fix-runner/tests pins the same facts on the plan; this
   # catches the text of an edit before a plan has to.
   fix-runner:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_X64 || 'blacksmith-4vcpu-ubuntu-2404' }}
     steps:
       - uses: actions/checkout@v7
 
@@ -146,7 +146,7 @@ jobs:
           done
 
   tflint:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_X64 || 'blacksmith-4vcpu-ubuntu-2404' }}
     steps:
       - uses: actions/checkout@v7
       - uses: terraform-linters/setup-tflint@v6
