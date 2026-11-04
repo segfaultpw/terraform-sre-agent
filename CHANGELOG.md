@@ -8,6 +8,22 @@ than a `terraform apply`.
 - **minor**: a permission added, because the product gained a feature needing it
 - **patch**: documentation, validation, formatting; no change to what is granted
 
+## [4.12.0]
+
+The `fix-runner` module runs the **v2.4.1** runner image: a run on a workspace volume that is EFS no
+longer fails with `Error: locking protocol`. opencode keeps its sessions in a SQLite database
+opened in WAL mode, which a network file system cannot serve, and the agent's home (and so the
+database) is on the volume. The runner now keeps that one database in a directory of its own run on
+the task's ephemeral disk and removes it with the run; the agent's installed tools, caches and notes
+stay on the volume.
+
+### Changed
+- `fix-runner`: the default `image` is the `sre-agent-opencode` v2.4.1 multi-architecture index,
+  pinned by digest
+  (`ghcr.io/segfaultpw/sre-agent-opencode-runner@sha256:da9bff6125ddb5ffb30fc4ce4ec6c6f7df6860461548a50dc0cccdb5f3c1d96f`).
+  No permission or variable changes. `ephemeral_storage_gib` (default and floor 21) already
+  holds `/tmp`, where the database directories are made.
+
 ## [4.11.0]
 
 The `fix-runner` module runs the **v2.4.0** runner image: a change asked for on an open pull
