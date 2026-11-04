@@ -39,7 +39,11 @@ jobs:
           for dir in modules/*/; do
             [ -d "${dir}tests" ] || continue
             echo "==> $dir"
-            (cd "$dir" && terraform init -backend=false -input=false > /dev/null && terraform test)
+            # One process per test file: a single `terraform test` keeps every mocked provider it
+            # started until it exits, and the fix-runner suite (over two hundred runs) outgrew a
+            # hosted runner's memory and was killed (exit 143) when it ran as one process.
+            (cd "$dir" && terraform init -backend=false -input=false > /dev/null &&
+              for f in tests/*.tftest.hcl; do terraform test -filter="$f"; done)
           done
 
   # The verifier module's poller is code that runs in a customer's account, and its task role is

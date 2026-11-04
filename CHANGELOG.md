@@ -8,6 +8,13 @@ than a `terraform apply`.
 - **minor**: a permission added, because the product gained a feature needing it
 - **patch**: documentation, validation, formatting; no change to what is granted
 
+## [4.13.1]
+
+No change to what the module creates or grants: the same module as 4.13.0, whose CI could not finish.
+The `fix-runner` test suite is now five files and the CI job runs each file in its own
+`terraform test` process, because one process over all of them outgrew a hosted runner's memory and
+was killed. Use 4.13.1 rather than 4.13.0.
+
 ## [4.13.0]
 
 The `fix-runner` module can scale the runner to zero, run several requests at once in a task, and
