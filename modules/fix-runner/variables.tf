@@ -123,6 +123,28 @@ variable "runner_count" {
   }
 }
 
+variable "concurrency" {
+  type        = number
+  description = <<-EOT
+    How many requests each task works on at once, 1 to 8, one by default. Above 1 the task definition
+    sets SRE_CONCURRENCY, and the runner starts that many workers in the task, each with its own
+    instance id, workspace and heartbeat; the per-repository locks and the queue's leases keep two
+    workers off one repository. Each worker needs about 1 vCPU and 2 GiB of the task, so raise cpu
+    and memory with it (a check warns at plan time when the task is smaller than that). The
+    workers share the one memory tree and the per-instance workspace layout, so the task definition
+    also sets SRE_WORKSPACE_PER_INSTANCE=1 and SRE_MEMORY_ROOT=/workspace/memory, as it does for
+    runner_count above 1. At 1 nothing is set and the task definition is the one this module has
+    always had. Needs the sre-agent-opencode v2.5.0 runner image or newer: an older image ignores
+    the variable and works one request at a time.
+  EOT
+  default     = 1
+
+  validation {
+    condition     = var.concurrency == floor(var.concurrency) && var.concurrency >= 1 && var.concurrency <= 8
+    error_message = "concurrency must be a whole number from 1 to 8."
+  }
+}
+
 ## Secrets
 
 variable "api_key_secret_arn" {
@@ -285,6 +307,26 @@ variable "agent_aws_access" {
   default     = false
 }
 
+variable "agent_aws_role_arn" {
+  type        = string
+  description = <<-EOT
+    The ARN of an IAM role in your account that the runner assumes for each request and hands to the
+    agent in place of the task role's own credentials, so the agent holds credentials that expire
+    when the request ends (session name sre-<start of the handoff id>, one hour at most). It becomes
+    SRE_AGENT_AWS_ROLE_ARN, and the task role is allowed sts:AssumeRole on exactly this role. The
+    role's trust policy must name the task role (the task_role_arn output) as a principal, and its
+    permissions are what the agent may read: give it reads only. Needs agent_aws_access = true,
+    because the credentials reach the agent only then, and the sre-agent-opencode v2.5.0 runner
+    image or newer. Null (the default) sets nothing.
+  EOT
+  default     = null
+
+  validation {
+    condition     = var.agent_aws_role_arn == null ? true : can(regex("^arn:aws[a-z-]*:iam::[0-9]{12}:role/.+$", var.agent_aws_role_arn))
+    error_message = "agent_aws_role_arn must be an IAM role ARN (arn:aws:iam::<account>:role/<name>)."
+  }
+}
+
 variable "extra_policy_arns" {
   type        = list(string)
   description = <<-EOT
@@ -320,11 +362,15 @@ variable "extra_environment" {
     the image, never under /workspace, which the agent can write. With a GitHub App
     (github_app_id set) SRE_GITHUB_APP_ID is the module's own as well and is refused (it sets it
     from github_app_id); SRE_GITHUB_APP_PRIVATE_KEY is refused in every mode, because its name is
-    credential-shaped. With runner_count above 1,
+    credential-shaped. SRE_CONCURRENCY and SRE_AGENT_AWS_ROLE_ARN are the module's own (concurrency
+    and agent_aws_role_arn) and are refused. SRE_HOOKS_DIR, SRE_HOOK_TIMEOUT_SECONDS and
+    SRE_TASK_PROTECTION are yours to set; SRE_HOOKS_DIR must be an absolute path in the image,
+    never under /workspace, like SRE_RUNNER_SETUP. With runner_count or concurrency above 1,
     SRE_WORKSPACE_PER_INSTANCE and SRE_MEMORY_ROOT are the module's own as well and are refused
-    (it sets both for the pool), and so is SRE_RUNNER_INSTANCE, because each task names itself
-    by its hostname and one shared identity would make the pool's locks name one instance;
-    at 1 they are yours, so a single task can still opt into the split workspace on its own.
+    (it sets both for the workers), and with runner_count above 1 so is SRE_RUNNER_INSTANCE, because
+    each task names itself by its hostname and one shared identity would make the pool's locks name
+    one instance; with both at 1 they are yours, so a single task can still opt into the split
+    workspace on its own.
     Also refused are the names that move the boundary between the runner and the agent: PATH, HOME,
     ENV, BASH_ENV, NODE_OPTIONS, NODE_PATH, SRE_RUNNER_USER, SRE_AGENT_USER, and any name that
     starts with LD_, GIT_ or OPENCODE_.
@@ -342,9 +388,10 @@ variable "extra_environment" {
         "SRE_SERVER_URL", "SRE_MODEL", "SRE_WORKSPACE", "SRE_MEMORY_BUCKET", "SRE_MEMORY_PREFIX",
         "SRE_AGENT_AWS_ACCESS", "SRE_ONCE", "AWS_REGION", "AWS_DEFAULT_REGION",
         "SRE_API_KEY", "SRE_GITHUB_TOKEN", "SRE_AGENT_GITHUB_TOKEN",
+        "SRE_CONCURRENCY", "SRE_AGENT_AWS_ROLE_ARN",
       ], name)
     ])
-    error_message = "extra_environment cannot set SRE_SERVER_URL, SRE_MODEL, SRE_WORKSPACE, SRE_MEMORY_BUCKET, SRE_MEMORY_PREFIX, SRE_AGENT_AWS_ACCESS, AWS_REGION or AWS_DEFAULT_REGION (this module sets them from its own variables), SRE_API_KEY, SRE_GITHUB_TOKEN or SRE_AGENT_GITHUB_TOKEN (secrets), or SRE_ONCE (the runner would exit after one poll and ECS would restart it in a loop)."
+    error_message = "extra_environment cannot set SRE_SERVER_URL, SRE_MODEL, SRE_WORKSPACE, SRE_MEMORY_BUCKET, SRE_MEMORY_PREFIX, SRE_AGENT_AWS_ACCESS, SRE_CONCURRENCY, SRE_AGENT_AWS_ROLE_ARN, AWS_REGION or AWS_DEFAULT_REGION (this module sets them from its own variables), SRE_API_KEY, SRE_GITHUB_TOKEN or SRE_AGENT_GITHUB_TOKEN (secrets), or SRE_ONCE (the runner would exit after one poll and ECS would restart it in a loop)."
   }
 
   validation {
@@ -359,6 +406,11 @@ variable "extra_environment" {
   validation {
     condition     = !contains(keys(var.extra_environment), "SRE_RUNNER_SETUP") ? true : startswith(var.extra_environment["SRE_RUNNER_SETUP"], "/") && !startswith(var.extra_environment["SRE_RUNNER_SETUP"], "/workspace/") && !can(regex("(^|/)\\.\\.(/|$)", var.extra_environment["SRE_RUNNER_SETUP"]))
     error_message = "SRE_RUNNER_SETUP must be an absolute path in the image, never under /workspace: the volume is writable by the agent, and the entrypoint runs the script as root at the next start."
+  }
+
+  validation {
+    condition     = !contains(keys(var.extra_environment), "SRE_HOOKS_DIR") ? true : startswith(var.extra_environment["SRE_HOOKS_DIR"], "/") && !startswith(var.extra_environment["SRE_HOOKS_DIR"], "/workspace/") && var.extra_environment["SRE_HOOKS_DIR"] != "/workspace" && !can(regex("(^|/)\\.\\.(/|$)", var.extra_environment["SRE_HOOKS_DIR"]))
+    error_message = "SRE_HOOKS_DIR must be an absolute path in the image, never under /workspace: the volume is writable by the agent, and the runner runs the hooks in it as itself around every request."
   }
 
   validation {

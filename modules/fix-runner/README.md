@@ -188,6 +188,29 @@ Integrations card says **Polling now**, **Not polling**, **Never polled** or **S
 runner that cannot start (a missing value, a missing tool) says why on the first lines of the log
 group and exits, and ECS retries; after repeated failures the circuit breaker fails the deployment.
 
+## Concurrency: several requests in one task
+
+`concurrency` (default 1, 1 to 8) sets how many requests each task works on at once. Above 1 the
+task definition gains `SRE_CONCURRENCY`, and the runner starts that many workers inside the task.
+Each worker is a complete runner with its own instance id (`<name>-<n>`), its own workspace under
+`instances/<id>` and its own heartbeat, so nothing is shared in memory; the queue's leases and the
+per-repository locks keep two workers off one repository, and a worker that dies is restarted.
+`SRE_WORKSPACE_PER_INSTANCE=1` and `SRE_MEMORY_ROOT=/workspace/memory` are set for the workers
+exactly as for a pool of tasks, and `extra_environment` cannot carry them. At 1 none of this is set
+and the task definition is the one this module has always had.
+
+Size the task for its workers: each one clones, builds and runs the agent, which takes about **1 vCPU
+and 2 GiB**. The default task (2 vCPU, 8 GiB) carries two workers comfortably; for more, raise `cpu`
+and `memory` (a pair Fargate does not offer is refused at plan time), for example `concurrency = 4`
+with `cpu = 4096` and `memory = 8192` or more. A task smaller than that rule of thumb fails the
+`concurrency_fits_the_task` check with a warning at plan time. It is a warning and not a refusal
+because a repository that builds in little memory can run more workers than the rule allows.
+
+Concurrency needs the `sre-agent-opencode` **v2.5.0** runner image or newer. An older image ignores
+`SRE_CONCURRENCY` and works one request at a time, so raising it there costs the memory and gains
+nothing. `concurrency` multiplies with `runner_count`: three tasks of four workers is twelve
+requests at once, on twelve instance ids.
+
 ## opencode's own log
 
 The agent's opencode runs with its server log switched on, and when the process ends, however it
@@ -342,6 +365,30 @@ live estate: attach a read-only policy of your own, set both, and keep the polic
 process can use it (and a setup script, which runs as root in the container). Never attach a policy that writes to a place whose loss you
 cannot recover.
 
+**`agent_aws_role_arn`: credentials that expire with the request.** With `agent_aws_access = true`
+the agent holds the task role for as long as the task lives. Set `agent_aws_role_arn` to a role of
+your own instead, and the runner assumes it for each request (`aws sts assume-role`, session name
+`sre-` and the start of the handoff id, one hour at most) and gives the agent that session's
+credentials, so what the agent holds ends with the request. The module sets
+`SRE_AGENT_AWS_ROLE_ARN` and lets the task role call `sts:AssumeRole` on exactly that role and no
+other; the role's own trust policy must name the task role (the `task_role_arn` output) as a
+principal, which this module does not edit because the role is yours:
+
+```hcl
+data "aws_iam_policy_document" "agent_trust" {
+  statement {
+    actions = ["sts:AssumeRole"]
+    principals {
+      type        = "AWS"
+      identifiers = [module.sre_agent_fix_runner.task_role_arn]
+    }
+  }
+}
+```
+
+Give the role reads only, as for `extra_policy_arns`. It needs the runner image v2.5.0 or newer, and
+it is refused without `agent_aws_access = true`, because the credentials reach the agent only then.
+
 **Give the runner an account of its own** if your other workloads hold production credentials. A
 runner placed in a VPC with routes to them shares their reachability with the agent.
 
@@ -426,6 +473,8 @@ as root at the next start.
 | `cpu`, `memory` | `2048`, `8192` | Fargate sizing. A pair Fargate does not offer is refused at plan time. |
 | `ephemeral_storage_gib` | `30` | Scratch beside the volume, 21 to 200. |
 | `runner_count` | `1` | How many runner tasks run on the one volume. Above 1 the queue leases each job to the task that collects it, each task works under `instances/<its instance id>`, and the per-repository locks guard the shared memory. A pool needs the runner image v1.6.0 or newer. |
+| `concurrency` | `1` | How many requests each task works on at once, 1 to 8 (`SRE_CONCURRENCY`). Each worker needs about 1 vCPU and 2 GiB of the task. Needs the runner image v2.5.0 or newer. |
+| `agent_aws_role_arn` | `null` | An IAM role the runner assumes for each request and gives the agent in place of the task role's credentials (`SRE_AGENT_AWS_ROLE_ARN`); the task role may assume exactly this role. Needs `agent_aws_access = true` and the runner image v2.5.0 or newer. |
 | `memory_bucket_name` | `null` | An existing bucket for the memory mirror. Null creates one. |
 | `memory_bucket_kms_key_arn` | `null` | The customer-managed key behind an existing `memory_bucket_name`, so the task role may use it through S3. Refused without `memory_bucket_name`. |
 | `memory_prefix` | `memory/` | The mirror's prefix, `SRE_MEMORY_PREFIX`; the task role's bucket access stops here. Held to the runner's own rule: at most 512 characters, no empty, `.` or `..` part. |

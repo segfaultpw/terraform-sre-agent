@@ -13,6 +13,9 @@
  *     own directories under instances/<its instance id>, and the runner's per-repository locks
  *     guard the one shared memory tree. ECS starts a replacement once the old task has left
  *     RUNNING, so a short overlap with a task that is still stopping is possible.
+ *   - concurrency workers in each task (one by default): above 1 the runner starts that many
+ *     complete runners in the task, each with its own instance id and workspace under the same
+ *     per-instance layout, and the task definition sets SRE_CONCURRENCY.
  *   - /workspace is an encrypted EFS volume, so the clones, the agent's home and its notes survive
  *     a replaced task. The access point sets a root directory and who owns it at creation and no
  *     posix_user, because the image starts as root and its runner switches between two accounts.
@@ -109,6 +112,9 @@ locals {
   }
   memory_limits = local.fargate_memory[tostring(var.cpu)]
 
+  # More than one runner process works on the volume at once: tasks, or workers inside a task.
+  shared_workspace = var.runner_count > 1 || var.concurrency > 1
+
   # GitHub authentication is one shape exactly: a GitHub App (github_app_id with the key's secret)
   # or static tokens. The refusal is on the task definition, because a variable validation cannot
   # read another variable on every Terraform this module still takes.
@@ -141,11 +147,15 @@ locals {
     local.github_app_auth ? { SRE_GITHUB_APP_ID = var.github_app_id } : {},
     # Only the exact value 1 opts in, so false is the absence of the variable.
     var.agent_aws_access ? { SRE_AGENT_AWS_ACCESS = "1" } : {},
-    # The pool layout: each task works under instances/<its instance id> on the shared volume,
+    # The workers' layout: each works under instances/<its instance id> on the shared volume,
     # and the memory stays one tree that the runner's per-repository locks serialize the writers
-    # of. At the default count of one neither variable exists, so that task definition is exactly
+    # of. It applies to several tasks and to several workers in one task alike. At the default
+    # of one task and one worker neither variable exists, so that task definition is exactly
     # the one this module has always set.
-    var.runner_count > 1 ? { SRE_WORKSPACE_PER_INSTANCE = "1", SRE_MEMORY_ROOT = "/workspace/memory" } : {},
+    local.shared_workspace ? { SRE_WORKSPACE_PER_INSTANCE = "1", SRE_MEMORY_ROOT = "/workspace/memory" } : {},
+    # Absent at 1, like the layout above, so a plan with none of the new variables is unchanged.
+    var.concurrency > 1 ? { SRE_CONCURRENCY = tostring(var.concurrency) } : {},
+    var.agent_aws_role_arn == null ? {} : { SRE_AGENT_AWS_ROLE_ARN = var.agent_aws_role_arn },
   )
 
   # ECS tasks are the principal whose assumption AWS documents the confused-deputy keys for.
@@ -639,6 +649,16 @@ resource "aws_iam_role_policy" "task" {
           Resource = "${local.bucket_arn}/${var.memory_prefix}*"
         },
       ],
+      var.agent_aws_role_arn == null ? [] : [
+        {
+          # The runner assumes this one role for each request and gives the agent its short-lived
+          # credentials. Whether the role trusts the task role is the role's own policy.
+          Sid      = "AssumeTheAgentRole"
+          Effect   = "Allow"
+          Action   = ["sts:AssumeRole"]
+          Resource = var.agent_aws_role_arn
+        },
+      ],
       var.memory_bucket_kms_key_arn == null ? [] : [
         {
           # An existing bucket encrypted with a customer-managed key: every object write needs
@@ -657,6 +677,11 @@ resource "aws_iam_role_policy" "task" {
   })
 
   lifecycle {
+    precondition {
+      condition     = var.agent_aws_role_arn == null || var.agent_aws_access
+      error_message = "agent_aws_role_arn needs agent_aws_access = true: the assumed role's credentials reach the agent only when the agent is allowed AWS access, so without it the role would be assumed for nothing and the task role granted sts:AssumeRole on it for nothing."
+    }
+
     precondition {
       condition     = var.memory_bucket_kms_key_arn == null || var.memory_bucket_name != null
       error_message = "memory_bucket_kms_key_arn is for an existing bucket (memory_bucket_name). The bucket this module creates is encrypted with SSE-S3 and needs no key, and a grant on a key nothing uses is a permission for nothing."
@@ -815,9 +840,17 @@ resource "aws_ecs_task_definition" "this" {
     precondition {
       # A variable validation cannot read another variable on every Terraform this module still
       # takes (cross-variable validation needs 1.9), so the refusal lives here. Above one task
-      # the module sets both names for the pool, and merge() would silently drop a value from
-      # extra_environment; at one task they are the operator's to set.
-      # SRE_RUNNER_INSTANCE is refused with them: in a pool the runner names
+      # or one worker the module sets both names for the layout, and merge() would silently drop
+      # a value from extra_environment; with one of each they are the operator's to set.
+      condition = local.shared_workspace ? (
+        !contains(keys(var.extra_environment), "SRE_WORKSPACE_PER_INSTANCE")
+        && !contains(keys(var.extra_environment), "SRE_MEMORY_ROOT")
+      ) : true
+      error_message = "With runner_count or concurrency above 1 this module sets SRE_WORKSPACE_PER_INSTANCE and SRE_MEMORY_ROOT itself (the workers' workspace split and the one shared memory tree), so extra_environment cannot carry them."
+    }
+
+    precondition {
+      # SRE_RUNNER_INSTANCE is refused with the pool: in a pool the runner names
       # itself by its hostname (every Fargate task's differs), and one shared
       # identity would make every lock in the pool name one instance, so the
       # liveness check could not tell one task's work from another's.
@@ -829,13 +862,21 @@ resource "aws_ecs_task_definition" "this" {
       # accepts a name:tag@sha256:... spelling and a mirror's name, so the
       # v1.5.0 digest under either form must be refused the same way.
       condition = var.runner_count > 1 ? (
-        !contains(keys(var.extra_environment), "SRE_WORKSPACE_PER_INSTANCE")
-        && !contains(keys(var.extra_environment), "SRE_MEMORY_ROOT")
-        && !contains(keys(var.extra_environment), "SRE_RUNNER_INSTANCE")
+        !contains(keys(var.extra_environment), "SRE_RUNNER_INSTANCE")
         && split("@", var.image)[1] != "sha256:ef95a56a8ae2763e7c9b1a98e261443a4489ca78ba449d47331f3d7a163b1b52"
       ) : true
-      error_message = "With runner_count above 1 this module sets SRE_WORKSPACE_PER_INSTANCE and SRE_MEMORY_ROOT itself (the pool's workspace split and the one shared memory tree), extra_environment cannot carry them or SRE_RUNNER_INSTANCE (each task names itself by its hostname), and the image must be the v1.6.0 runner or newer: an older image sends no instance id, so two tasks would be one runner to the queue and every job twice."
+      error_message = "With runner_count above 1 extra_environment cannot carry SRE_RUNNER_INSTANCE (each task names itself by its hostname), and the image must be the v1.6.0 runner or newer: an older image sends no instance id, so two tasks would be one runner to the queue and every job twice."
     }
+  }
+}
+
+# A worker is a complete runner with its own clone, build and agent, so the task has to be able to
+# carry them all. A warning, not a refusal: a repository that builds in little memory can run
+# more workers than the rule of thumb allows.
+check "concurrency_fits_the_task" {
+  assert {
+    condition     = var.cpu >= var.concurrency * 1024 && var.memory >= var.concurrency * 2048
+    error_message = "concurrency ${var.concurrency} with cpu ${var.cpu} and memory ${var.memory} MiB leaves each worker less than about 1 vCPU (1024 units) and 2 GiB (2048 MiB), so builds and tests will be slow or run out of memory. Raise cpu and memory, or lower concurrency."
   }
 }
 

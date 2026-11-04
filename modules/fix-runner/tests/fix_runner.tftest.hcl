@@ -2646,3 +2646,308 @@ run "the_outputs_name_what_an_operator_looks_for" {
     error_message = "the one scope the API key must carry"
   }
 }
+
+## Concurrency and the agent role
+
+run "a_plan_with_none_of_the_new_variables_is_the_shape_it_always_was" {
+  command = apply
+
+  assert {
+    condition = {
+      for e in jsondecode(aws_ecs_task_definition.this.container_definitions)[0].environment : e.name => e.value
+      } == {
+      SRE_SERVER_URL     = "https://sre.example.com"
+      SRE_MODEL          = "openrouter/deepseek/deepseek-v4-pro"
+      SRE_WORKSPACE      = "/workspace"
+      SRE_MEMORY_BUCKET  = "sre-agent-fix-runner-memory-123456789012-us-east-1"
+      SRE_MEMORY_PREFIX  = "memory/"
+      AWS_REGION         = "us-east-1"
+      AWS_DEFAULT_REGION = "us-east-1"
+    }
+    error_message = "with concurrency, agent_aws_role_arn and scaling unset the environment is exactly the one this module has always set"
+  }
+
+  assert {
+    condition = toset([
+      for s in jsondecode(aws_iam_role_policy.task.policy).Statement : s.Sid
+    ]) == toset(["MountTheWorkspace", "ListTheMemoryPrefix", "ReadWriteAndDeleteTheMemoryPrefix"])
+    error_message = "with agent_aws_role_arn unset the task role gains no statement"
+  }
+
+  assert {
+    condition     = aws_ecs_service.this.desired_count == 1
+    error_message = "the fixed fleet keeps its count"
+  }
+}
+
+run "concurrency_above_one_sets_the_worker_count_and_the_workers_layout" {
+  command = apply
+
+  variables {
+    concurrency = 2
+  }
+
+  assert {
+    condition = {
+      for e in jsondecode(aws_ecs_task_definition.this.container_definitions)[0].environment : e.name => e.value
+      } == {
+      SRE_SERVER_URL             = "https://sre.example.com"
+      SRE_MODEL                  = "openrouter/deepseek/deepseek-v4-pro"
+      SRE_WORKSPACE              = "/workspace"
+      SRE_MEMORY_BUCKET          = "sre-agent-fix-runner-memory-123456789012-us-east-1"
+      SRE_MEMORY_PREFIX          = "memory/"
+      SRE_CONCURRENCY            = "2"
+      SRE_WORKSPACE_PER_INSTANCE = "1"
+      SRE_MEMORY_ROOT            = "/workspace/memory"
+      AWS_REGION                 = "us-east-1"
+      AWS_DEFAULT_REGION         = "us-east-1"
+    }
+    error_message = "two workers in one task gain exactly SRE_CONCURRENCY and the per-instance layout, and the task stays one service task"
+  }
+
+  assert {
+    condition     = aws_ecs_service.this.desired_count == 1
+    error_message = "concurrency is workers inside a task, not more tasks"
+  }
+}
+
+run "concurrency_of_one_sets_nothing" {
+  command = apply
+
+  variables {
+    concurrency = 1
+  }
+
+  assert {
+    condition     = !contains([for e in jsondecode(aws_ecs_task_definition.this.container_definitions)[0].environment : e.name], "SRE_CONCURRENCY")
+    error_message = "at 1 the variable is absent"
+  }
+}
+
+run "concurrency_eight_is_accepted" {
+  command = plan
+
+  variables {
+    concurrency = 8
+    cpu         = 8192
+    memory      = 16384
+  }
+
+  assert {
+    condition     = { for e in jsondecode(aws_ecs_task_definition.this.container_definitions)[0].environment : e.name => e.value }["SRE_CONCURRENCY"] == "8"
+    error_message = "the top of the range"
+  }
+}
+
+run "concurrency_nine_is_refused" {
+  command = plan
+
+  variables {
+    concurrency = 9
+  }
+
+  expect_failures = [var.concurrency]
+}
+
+run "concurrency_zero_is_refused" {
+  command = plan
+
+  variables {
+    concurrency = 0
+  }
+
+  expect_failures = [var.concurrency]
+}
+
+run "a_fractional_concurrency_is_refused" {
+  command = plan
+
+  variables {
+    concurrency = 1.5
+  }
+
+  expect_failures = [var.concurrency]
+}
+
+run "a_task_too_small_for_its_workers_is_warned_about" {
+  command = plan
+
+  variables {
+    concurrency = 5
+  }
+
+  expect_failures = [check.concurrency_fits_the_task]
+}
+
+run "a_task_that_fits_its_workers_raises_no_warning" {
+  command = plan
+
+  variables {
+    concurrency = 2
+  }
+}
+
+run "a_cpu_memory_pair_fargate_does_not_offer_is_still_refused_with_workers" {
+  command = plan
+
+  variables {
+    concurrency = 4
+    cpu         = 4096
+    memory      = 9000
+  }
+
+  expect_failures = [aws_ecs_task_definition.this]
+}
+
+run "extra_environment_cannot_set_the_worker_count" {
+  command = plan
+
+  variables {
+    extra_environment = { SRE_CONCURRENCY = "4" }
+  }
+
+  expect_failures = [var.extra_environment]
+}
+
+run "extra_environment_cannot_set_the_agent_role" {
+  command = plan
+
+  variables {
+    extra_environment = { SRE_AGENT_AWS_ROLE_ARN = "arn:aws:iam::123456789012:role/agent-reads" }
+  }
+
+  expect_failures = [var.extra_environment]
+}
+
+run "extra_environment_cannot_set_the_split_workspace_with_workers" {
+  command = plan
+
+  variables {
+    concurrency       = 2
+    extra_environment = { SRE_WORKSPACE_PER_INSTANCE = "1" }
+  }
+
+  expect_failures = [aws_ecs_task_definition.this]
+}
+
+run "extra_environment_cannot_set_the_memory_root_with_workers" {
+  command = plan
+
+  variables {
+    concurrency       = 2
+    extra_environment = { SRE_MEMORY_ROOT = "/workspace/memory" }
+  }
+
+  expect_failures = [aws_ecs_task_definition.this]
+}
+
+run "one_task_with_workers_may_still_name_its_own_instance" {
+  command = plan
+
+  variables {
+    concurrency       = 2
+    extra_environment = { SRE_RUNNER_INSTANCE = "fixer" }
+  }
+
+  assert {
+    condition     = { for e in jsondecode(aws_ecs_task_definition.this.container_definitions)[0].environment : e.name => e.value }["SRE_RUNNER_INSTANCE"] == "fixer"
+    error_message = "the supervisor derives its workers' ids from the operator's base name; only a pool of tasks refuses a shared name"
+  }
+}
+
+run "hooks_variables_pass_through_extra_environment" {
+  command = plan
+
+  variables {
+    extra_environment = {
+      SRE_HOOKS_DIR            = "/opt/sre-hooks"
+      SRE_HOOK_TIMEOUT_SECONDS = "120"
+      SRE_TASK_PROTECTION      = "auto"
+    }
+  }
+
+  assert {
+    condition     = { for e in jsondecode(aws_ecs_task_definition.this.container_definitions)[0].environment : e.name => e.value }["SRE_HOOKS_DIR"] == "/opt/sre-hooks"
+    error_message = "the hooks directory in the image reaches the runner"
+  }
+}
+
+run "a_hooks_directory_under_the_volume_is_refused" {
+  command = plan
+
+  variables {
+    extra_environment = { SRE_HOOKS_DIR = "/workspace/hooks" }
+  }
+
+  expect_failures = [var.extra_environment]
+}
+
+run "a_relative_hooks_directory_is_refused" {
+  command = plan
+
+  variables {
+    extra_environment = { SRE_HOOKS_DIR = "hooks" }
+  }
+
+  expect_failures = [var.extra_environment]
+}
+
+run "a_hooks_directory_with_a_dot_dot_part_is_refused" {
+  command = plan
+
+  variables {
+    extra_environment = { SRE_HOOKS_DIR = "/opt/../workspace/hooks" }
+  }
+
+  expect_failures = [var.extra_environment]
+}
+
+run "the_agent_role_is_assumed_by_the_task_role_and_nothing_more" {
+  command = apply
+
+  variables {
+    agent_aws_access   = true
+    agent_aws_role_arn = "arn:aws:iam::123456789012:role/agent-reads"
+  }
+
+  assert {
+    condition     = { for e in jsondecode(aws_ecs_task_definition.this.container_definitions)[0].environment : e.name => e.value }["SRE_AGENT_AWS_ROLE_ARN"] == "arn:aws:iam::123456789012:role/agent-reads"
+    error_message = "the role reaches the runner"
+  }
+
+  assert {
+    condition = [
+      for s in jsondecode(aws_iam_role_policy.task.policy).Statement : s if s.Sid == "AssumeTheAgentRole"
+    ] == [{ Sid = "AssumeTheAgentRole", Effect = "Allow", Action = ["sts:AssumeRole"], Resource = "arn:aws:iam::123456789012:role/agent-reads" }]
+    error_message = "one statement: assume exactly the named role"
+  }
+
+  assert {
+    condition = alltrue([
+      for s in jsondecode(aws_iam_role_policy.task.policy).Statement :
+      !contains(flatten([s.Resource]), "*")
+    ])
+    error_message = "no statement is on every resource"
+  }
+}
+
+run "an_agent_role_without_agent_aws_access_is_refused" {
+  command = plan
+
+  variables {
+    agent_aws_role_arn = "arn:aws:iam::123456789012:role/agent-reads"
+  }
+
+  expect_failures = [aws_iam_role_policy.task]
+}
+
+run "an_agent_role_that_is_not_a_role_arn_is_refused" {
+  command = plan
+
+  variables {
+    agent_aws_access   = true
+    agent_aws_role_arn = "arn:aws:iam::123456789012:user/someone"
+  }
+
+  expect_failures = [var.agent_aws_role_arn]
+}
