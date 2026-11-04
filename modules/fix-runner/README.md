@@ -294,8 +294,9 @@ Meanwhile requests wait under the existing rules: the 45 minute backstop, then t
   cluster (`cluster_arn`) that includes other services' tasks, and with `agent_aws_access = true` and
   no `agent_aws_role_arn` the agent itself holds the task role and so this permission. Give the
   runner a cluster of its own, or set `agent_aws_role_arn`, when that matters.
-- **The AWS provider must know the `nodejs24.x` runtime.** If a plan rejects it, run
-  `terraform init -upgrade`.
+- **`scaling` needs the AWS provider 6.21.0 or newer**, the first release that accepts the
+  `nodejs24.x` Lambda runtime. The fixed fleet still works on any provider the module supported
+  before; if a plan rejects the runtime, run `terraform init -upgrade`.
 - It needs a SRE Agent that serves the demand endpoint (an older one answers 404 and the scaler
   fails with that, scaling nothing) and the v2.5.0 runner image or newer.
 - Scaling out is limited by the Fargate quota in your account and by the `max_runners` you set.

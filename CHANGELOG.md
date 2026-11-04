@@ -61,6 +61,8 @@ variables.
   module sets them) and an `SRE_HOOKS_DIR` that is relative or under `/workspace`.
 - `fix-runner`: the module now requires the `hashicorp/archive` provider (>= 2.0), which zips the
   scaler; run `terraform init -upgrade` if your lock file predates it.
+- `fix-runner`: `scaling` needs the AWS provider 6.21.0 or newer (the scaler runs on `nodejs24.x`); a
+  fixed fleet is unaffected.
 
 ## [4.12.0]
 
