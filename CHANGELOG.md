@@ -14,9 +14,10 @@ The `fix-runner` module can scale the runner to zero, run several requests at on
 hand the agent AWS credentials that expire with the request. A plan that sets none of the new
 variables is unchanged: same service, same task definition, same task role.
 
-The new behaviour needs the `sre-agent-opencode` **v2.5.0** runner image or newer. This release does
-not change the default `image` (still v2.4.1): to use `concurrency`, `agent_aws_role_arn` or the
-scaler's task protection, set `image` to the v2.5.0 digest. An older image ignores the new
+The new behaviour needs the `sre-agent-opencode` **v2.5.0** runner image or newer, which is now the
+default `image` (the multi-architecture index, pinned by digest,
+`ghcr.io/segfaultpw/sre-agent-opencode-runner@sha256:6106650ffc929020021df7a50365826ec615652ba8fada26d4bf5695ab0143fd`).
+Setting `image` to an older digest keeps the plan valid, and an older image ignores the new
 variables.
 
 ### Added
