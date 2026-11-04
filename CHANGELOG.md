@@ -8,6 +8,54 @@ than a `terraform apply`.
 - **minor**: a permission added, because the product gained a feature needing it
 - **patch**: documentation, validation, formatting; no change to what is granted
 
+## [4.13.0]
+
+The `fix-runner` module can scale the runner to zero, run several requests at once in a task, and
+hand the agent AWS credentials that expire with the request. A plan that sets none of the new
+variables is unchanged: same service, same task definition, same task role.
+
+The new behaviour needs the `sre-agent-opencode` **v2.5.0** runner image or newer. This release does
+not change the default `image` (still v2.4.1): to use `concurrency`, `agent_aws_role_arn` or the
+scaler's task protection, set `image` to the v2.5.0 digest. An older image ignores the new
+variables.
+
+### Added
+- `fix-runner`: `scaling = { min_runners, max_runners, idle_minutes }` (default null, the fixed
+  fleet). It adds a Node 20 Lambda function, run every minute, that asks SRE Agent how much work is
+  waiting (`GET /api/fix_runner/demand`, counts only) and sets the service's desired count to
+  `clamp(ceil((pending + running) / concurrency), min_runners, max_runners)`. It scales out at once
+  and scales in only after `idle_minutes` with nothing pending or running. A CloudWatch alarm on the
+  function's errors (notifying `alarm_actions`) shows a scaler that cannot reach SRE Agent or cannot
+  start tasks. **Cold start:** with `min_runners = 0` the first request after an idle spell waits
+  about a minute for a Fargate task to start and pull the image; `min_runners = 1` keeps one warm.
+  **Limit:** tasks still receive the long-lived API key from `api_key_secret_arn`, as before;
+  handing tasks an expiring token instead is a follow-up. The function runs outside any VPC, so SRE
+  Agent must be reachable from the internet.
+- `fix-runner`: `concurrency` (1 to 8, default 1) sets `SRE_CONCURRENCY`: that many requests at
+  once in each task, each worker with its own workspace under the per-instance layout. A plan-time
+  check warns when the task is smaller than about 1 vCPU and 2 GiB per worker.
+- `fix-runner`: `agent_aws_role_arn` (default null) sets `SRE_AGENT_AWS_ROLE_ARN`: the runner assumes
+  that role for each request and gives the agent its credentials, which end with the request. Needs
+  `agent_aws_access = true`.
+- `fix-runner`: `alarm_actions`, the notification targets of the scaler's alarm.
+- `fix-runner`: output `scaler_function_name`; README sections "Scaling to zero", "Concurrency" and
+  "Hooks" (`SRE_HOOKS_DIR` through `extra_environment`, which must be an absolute path outside
+  `/workspace`).
+
+### Changed
+- `fix-runner`: permissions. With `agent_aws_role_arn` the task role may call `sts:AssumeRole` on
+  exactly that role, and the role's own trust policy must name the task role. With `scaling` the
+  task role may call `ecs:GetTaskProtection` and `ecs:UpdateTaskProtection` on the tasks of its
+  cluster, so a task that holds a request is not stopped by a scale-in. Neither is added otherwise.
+- `fix-runner`: the service is now `aws_ecs_service.this[0]`; a `moved` block carries existing state
+  over, so the upgrade replaces nothing. With `scaling` the service is `aws_ecs_service.scaled`,
+  named `<name_prefix>-scaled`, and Terraform ignores its `desired_count`, which the scaler owns;
+  switching an existing deployment between the fixed fleet and `scaling` replaces the service once.
+- `fix-runner`: `extra_environment` refuses `SRE_CONCURRENCY` and `SRE_AGENT_AWS_ROLE_ARN` (the
+  module sets them) and an `SRE_HOOKS_DIR` that is relative or under `/workspace`.
+- `fix-runner`: the module now requires the `hashicorp/archive` provider (>= 2.0), which zips the
+  scaler; run `terraform init -upgrade` if your lock file predates it.
+
 ## [4.12.0]
 
 The `fix-runner` module runs the **v2.4.1** runner image: a run on a workspace volume that is EFS no

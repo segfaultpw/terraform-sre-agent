@@ -511,9 +511,11 @@ credential: a name containing `KEY`, `TOKEN`, `SECRET`, `PASS`, `AUTH`, `PRIVATE
 itself or carries as a secret, and `SRE_ONCE` (the runner would exit after one poll and ECS would
 restart it in a loop). With a GitHub App that includes `SRE_GITHUB_APP_ID`, which the module sets
 from `github_app_id` (`SRE_GITHUB_APP_PRIVATE_KEY` is refused in every mode by the credential
-rule). With `runner_count` above 1 that includes `SRE_WORKSPACE_PER_INSTANCE` and
-`SRE_MEMORY_ROOT`, which the module sets for the pool; at 1 they are yours, so a single task can
-still opt into the split workspace on its own.
+rule). It also includes `SRE_CONCURRENCY` and `SRE_AGENT_AWS_ROLE_ARN`, which come from
+`concurrency` and `agent_aws_role_arn`. With `runner_count`, `scaling.max_runners` or `concurrency`
+above 1 that includes `SRE_WORKSPACE_PER_INSTANCE` and `SRE_MEMORY_ROOT`, which the module sets for
+the workers; with all of them at 1 they are yours, so a single task can still opt into the split
+workspace on its own.
 Also refused: `PATH`, `HOME`, `ENV`, `BASH_ENV`, `NODE_OPTIONS`,
 `NODE_PATH`, `SRE_RUNNER_USER`, `SRE_AGENT_USER` and any name starting with `LD_`, `GIT_` or
 `OPENCODE_`, because these move the boundary between the runner and the agent (which programs the
@@ -522,6 +524,38 @@ root entrypoint and the runner run, who they run as, and what the agent is confi
 them from a setup script, instead. `SRE_RUNNER_SETUP` must be an absolute path in the image and
 never under `/workspace`, because the agent can write the volume and the entrypoint runs the script
 as root at the next start.
+
+## Hooks
+
+The v2.5.0 runner runs your own executables around every request, for the things only your account
+can do: provisioning a credential, warming a cache, cleaning up. Bake them into a derived image (see
+above), put them in one directory and point `SRE_HOOKS_DIR` at it through `extra_environment`:
+
+```hcl
+  extra_environment = {
+    SRE_HOOKS_DIR            = "/opt/sre-hooks"
+    SRE_HOOK_TIMEOUT_SECONDS = "60"
+  }
+```
+
+| Executable | Runs | If it fails |
+|---|---|---|
+| `pre-run` | before the agent starts | The request fails, naming the hook and its exit status. |
+| `credentials` | after `pre-run` | Prints `NAME=value` lines on stdout, which become the agent's environment for this request only. A failure, a timeout or a refused name fails the request, naming the hook (the name, never the value). |
+| `post-run` | after every request, whether it succeeded, failed or was taken over | Logged only. |
+
+Each hook runs as the runner's account, never the agent's, with `SRE_HANDOFF_ID`, `SRE_REPO`,
+`SRE_REQUEST_KIND` and `SRE_WORKSPACE` in its environment, and is stopped after
+`SRE_HOOK_TIMEOUT_SECONDS` (60 by default). A name from `credentials` must be an upper-case
+environment name and may not be `PATH`, `HOME`, `ENV`, `BASH_ENV`, `NODE_OPTIONS`, `NODE_PATH`,
+`GH_TOKEN`, `GITHUB_TOKEN` or start with `SRE_`, `OPENCODE_` or `GIT_`. The values are redacted from
+every log line, report and error and are never written to disk by the runner. Hooks apply to every
+kind of request, including a change on an open pull request and the Test button's request.
+`SRE_HOOKS_DIR` must be an absolute path in the image and never under `/workspace`, which the agent
+can write (the module refuses it). The runner's own README has the exact contract.
+
+For credentials that expire without a hook, `agent_aws_role_arn` (with `agent_aws_access = true`)
+makes the runner assume that role for each request and give the agent its short-lived credentials.
 
 ## Inputs
 
