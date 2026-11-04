@@ -124,6 +124,23 @@ jobs:
             exit 1
           fi
 
+      # Terraform owns the fixed fleet's count and the scaler owns the scaled service's: the
+      # lifecycle block cannot be conditional, so exactly the scaled resource ignores it. If the
+      # fixed one ignored it, a runner_count change would silently do nothing.
+      - name: Only the scaled service leaves its desired count to something else
+        run: |
+          set -euo pipefail
+          f=modules/fix-runner/main.tf
+          found="$(awk '/^resource "aws_ecs_service" "this"/ {r="this"} /^resource "aws_ecs_service" "scaled"/ {r="scaled"} /ignore_changes/ {print r}' "$f")"
+          if [ "$found" != "scaled" ]; then
+            echo "::error::exactly aws_ecs_service.scaled may use ignore_changes (found: ${found:-none})"
+            exit 1
+          fi
+
+      # The scaler is the only code the module ships and it runs in a customer's account.
+      - name: The scaler's tests
+        run: node --test modules/fix-runner/scaler/index.test.mjs
+
       # The runner sends each secret as it is in a request header, and a trailing newline there is
       # rejected, so a runner whose secrets were made with cat and Enter never polls.
       - name: The documented way to create a secret writes no trailing newline

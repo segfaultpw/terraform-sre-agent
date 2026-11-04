@@ -1,6 +1,6 @@
 output "service_arn" {
   description = "The ECS service that runs the fix runner."
-  value       = aws_ecs_service.this.id
+  value       = local.service_arn
 }
 
 output "cluster_arn" {
@@ -61,4 +61,9 @@ output "private_subnet_ids" {
 output "nat_public_ip" {
   description = "The address the runner's outbound traffic comes from, when this module built the network (null with an existing VPC). Allow it wherever your source host or package registry restricts by address."
   value       = local.create_network ? aws_eip.nat[0].public_ip : null
+}
+
+output "scaler_function_name" {
+  description = "The scaler Lambda function, when scaling is set (its log group is /aws/lambda/<name>); null for the fixed fleet."
+  value       = local.scaled ? aws_lambda_function.scaler[0].function_name : null
 }

@@ -145,6 +145,64 @@ variable "concurrency" {
   }
 }
 
+variable "scaling" {
+  type = object({
+    min_runners  = optional(number, 0)
+    max_runners  = number
+    idle_minutes = optional(number, 10)
+  })
+  description = <<-EOT
+    Scale the service with the work instead of running runner_count tasks all month. Null (the
+    default) is the fixed fleet: runner_count tasks, as always. Set it and the module adds a small
+    Lambda function in your account, run every minute, that asks SRE Agent how much work is waiting
+    (GET /api/fix_runner/demand, with the API key in api_key_secret_arn, counts only) and sets the
+    service's desired count to clamp(ceil((pending + running) / concurrency), min_runners,
+    max_runners). It scales out at once and scales in only after idle_minutes with nothing pending
+    and nothing running, and then straight to min_runners; a task that is working a request holds
+    ECS task protection, so a scale-in cannot end it. min_runners 0 (the default) means no task and
+    no Fargate charge while idle, and a request that arrives then waits for a task to start, about
+    a minute (a Fargate start and the image pull). idle_minutes is 1 to 1440 (10 by default).
+    The service is named <name_prefix>-scaled and Terraform no longer owns its desired count, so
+    runner_count must stay 1 and is not used. Needs a SRE Agent that serves the demand endpoint and
+    the sre-agent-opencode v2.5.0 runner image or newer. A task still gets the long-lived API key
+    from api_key_secret_arn; handing tasks an expiring token instead is a follow-up. The Lambda
+    function calls sre_agent_url from outside any VPC, so it must be reachable from the internet.
+    Switching an existing deployment between fixed and scaled replaces the ECS service (they are
+    different resources): the tasks stop and start once.
+  EOT
+  default     = null
+
+  validation {
+    condition = var.scaling == null ? true : (
+      var.scaling.min_runners == floor(var.scaling.min_runners) && var.scaling.min_runners >= 0
+      && var.scaling.max_runners == floor(var.scaling.max_runners) && var.scaling.max_runners >= 1
+    )
+    error_message = "scaling.min_runners must be a whole number, 0 or more, and scaling.max_runners a whole number, 1 or more."
+  }
+
+  validation {
+    condition     = var.scaling == null ? true : var.scaling.max_runners >= var.scaling.min_runners
+    error_message = "scaling.max_runners must be at least scaling.min_runners."
+  }
+
+  validation {
+    condition     = var.scaling == null ? true : (var.scaling.idle_minutes == floor(var.scaling.idle_minutes) && var.scaling.idle_minutes >= 1 && var.scaling.idle_minutes <= 1440)
+    error_message = "scaling.idle_minutes must be a whole number of minutes from 1 to 1440."
+  }
+}
+
+variable "alarm_actions" {
+  type        = list(string)
+  description = <<-EOT
+    ARNs (an SNS topic, usually) to notify when the scaler (see scaling) has failed for 15 minutes
+    running: SRE Agent unreachable or refusing the key, or ECS refusing to start tasks (a quota, a
+    subnet or the image). The alarm exists whenever scaling is set; empty (the default) gives it no
+    action, so it only shows in the console. While the scaler fails nothing is scaled and requests
+    wait under the usual rules (a retry elsewhere, then the platform_fallback setting).
+  EOT
+  default     = []
+}
+
 ## Secrets
 
 variable "api_key_secret_arn" {

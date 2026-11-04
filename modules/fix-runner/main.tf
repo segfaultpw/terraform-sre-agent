@@ -112,8 +112,19 @@ locals {
   }
   memory_limits = local.fargate_memory[tostring(var.cpu)]
 
+  scaled = var.scaling != null
+
+  # A pool: several tasks at once, as a fixed count or as the most a scaler may start. A ternary,
+  # not &&, because Terraform before 1.12 evaluates both sides and scaling may be null.
+  multi_task = var.runner_count > 1 || (local.scaled ? var.scaling.max_runners > 1 : false)
+
   # More than one runner process works on the volume at once: tasks, or workers inside a task.
-  shared_workspace = var.runner_count > 1 || var.concurrency > 1
+  shared_workspace = local.multi_task || var.concurrency > 1
+
+  scaled_service_name = "${var.name_prefix}-scaled"
+  service_arn         = one(concat(aws_ecs_service.this[*].id, aws_ecs_service.scaled[*].id))
+
+  cluster_name = element(split("/", local.cluster_arn), 1)
 
   # GitHub authentication is one shape exactly: a GitHub App (github_app_id with the key's secret)
   # or static tokens. The refusal is on the task definition, because a variable validation cannot
@@ -649,6 +660,17 @@ resource "aws_iam_role_policy" "task" {
           Resource = "${local.bucket_arn}/${var.memory_prefix}*"
         },
       ],
+      local.scaled ? [
+        {
+          # The runner keeps ECS scale-in protection on while it holds a request, through the task
+          # protection endpoint the agent on the host serves, which signs with this role. Only the
+          # tasks of this cluster.
+          Sid      = "ProtectTheTaskWhileItWorks"
+          Effect   = "Allow"
+          Action   = ["ecs:GetTaskProtection", "ecs:UpdateTaskProtection"]
+          Resource = "arn:${local.partition}:ecs:${local.region}:${local.account_id}:task/${local.cluster_name}/*"
+        },
+      ] : [],
       var.agent_aws_role_arn == null ? [] : [
         {
           # The runner assumes this one role for each request and gives the agent its short-lived
@@ -846,7 +868,7 @@ resource "aws_ecs_task_definition" "this" {
         !contains(keys(var.extra_environment), "SRE_WORKSPACE_PER_INSTANCE")
         && !contains(keys(var.extra_environment), "SRE_MEMORY_ROOT")
       ) : true
-      error_message = "With runner_count or concurrency above 1 this module sets SRE_WORKSPACE_PER_INSTANCE and SRE_MEMORY_ROOT itself (the workers' workspace split and the one shared memory tree), so extra_environment cannot carry them."
+      error_message = "With runner_count, scaling.max_runners or concurrency above 1 this module sets SRE_WORKSPACE_PER_INSTANCE and SRE_MEMORY_ROOT itself (the workers' workspace split and the one shared memory tree), so extra_environment cannot carry them."
     }
 
     precondition {
@@ -861,11 +883,11 @@ resource "aws_ecs_task_definition" "this" {
       # The DIGEST is compared, not the whole reference: the image variable
       # accepts a name:tag@sha256:... spelling and a mirror's name, so the
       # v1.5.0 digest under either form must be refused the same way.
-      condition = var.runner_count > 1 ? (
+      condition = local.multi_task ? (
         !contains(keys(var.extra_environment), "SRE_RUNNER_INSTANCE")
         && split("@", var.image)[1] != "sha256:ef95a56a8ae2763e7c9b1a98e261443a4489ca78ba449d47331f3d7a163b1b52"
       ) : true
-      error_message = "With runner_count above 1 extra_environment cannot carry SRE_RUNNER_INSTANCE (each task names itself by its hostname), and the image must be the v1.6.0 runner or newer: an older image sends no instance id, so two tasks would be one runner to the queue and every job twice."
+      error_message = "With runner_count above 1, or scaling with max_runners above 1, extra_environment cannot carry SRE_RUNNER_INSTANCE (each task names itself by its hostname), and the image must be the v1.6.0 runner or newer: an older image sends no instance id, so two tasks would be one runner to the queue and every job twice."
     }
   }
 }
@@ -880,7 +902,10 @@ check "concurrency_fits_the_task" {
   }
 }
 
+# The fixed fleet, runner_count tasks: Terraform owns the desired count.
 resource "aws_ecs_service" "this" {
+  count = local.scaled ? 0 : 1
+
   name            = var.name_prefix
   cluster         = local.cluster_arn
   task_definition = aws_ecs_task_definition.this.arn
@@ -928,4 +953,66 @@ resource "aws_ecs_service" "this" {
     aws_nat_gateway.this,
     aws_route_table_association.private,
   ]
+}
+
+# The same service when scaling is set, as a resource of its own because a lifecycle block cannot
+# be conditional: here the scaler owns the desired count, so Terraform must not reset it at the next
+# apply. The name differs from the fixed fleet's, so switching between the two never has one name in
+# two services at once (the destroy and the create are not ordered, and ECS refuses a name that is
+# still in use).
+resource "aws_ecs_service" "scaled" {
+  count = local.scaled ? 1 : 0
+
+  name            = local.scaled_service_name
+  cluster         = local.cluster_arn
+  task_definition = aws_ecs_task_definition.this.arn
+  launch_type     = "FARGATE"
+
+  # Starts at min_runners; the scaler sets the count from then on. The deployment bounds are the
+  # fixed fleet's, for the same reason.
+  desired_count                      = local.scaled ? var.scaling.min_runners : 1
+  deployment_maximum_percent         = 100
+  deployment_minimum_healthy_percent = 0
+
+  deployment_circuit_breaker {
+    enable   = true
+    rollback = true
+  }
+
+  network_configuration {
+    subnets          = local.subnet_ids
+    security_groups  = [aws_security_group.tasks.id]
+    assign_public_ip = local.assign_public_ip
+  }
+
+  tags = local.tags
+
+  lifecycle {
+    ignore_changes = [desired_count]
+
+    precondition {
+      condition     = var.runner_count == 1
+      error_message = "runner_count is the fixed fleet's count and scaling owns the count when it is set: leave runner_count at 1 and set scaling.max_runners."
+    }
+
+    precondition {
+      condition     = (var.vpc_id == null) == (var.private_subnet_ids == null)
+      error_message = "vpc_id and private_subnet_ids go together: set both to run in an existing VPC, or neither to have this module build one."
+    }
+  }
+
+  depends_on = [
+    aws_iam_role_policy.execution,
+    aws_iam_role_policy.task,
+    aws_iam_role_policy_attachment.extra,
+    aws_efs_mount_target.this,
+    aws_efs_file_system_policy.this,
+    aws_nat_gateway.this,
+    aws_route_table_association.private,
+  ]
+}
+
+moved {
+  from = aws_ecs_service.this
+  to   = aws_ecs_service.this[0]
 }

@@ -137,6 +137,7 @@ module "sre_agent_fix_runner" {
 | Log group | `/ecs/<name_prefix>`, 30 days by default. |
 | VPC, one public subnet, a private subnet per zone, NAT gateway | Built unless you pass `vpc_id` and `private_subnet_ids`. |
 | ECS cluster | Built unless you pass `cluster_arn`. |
+| With `scaling`: a Lambda function, a one-minute schedule, a role, a log group, an SSM parameter and an alarm | The scaler (see "Scaling to zero"). The service is then `<name_prefix>-scaled`, and the module no longer sets its desired count. |
 
 ## A pool of runner tasks on one volume
 
@@ -210,6 +211,77 @@ Concurrency needs the `sre-agent-opencode` **v2.5.0** runner image or newer. An 
 `SRE_CONCURRENCY` and works one request at a time, so raising it there costs the memory and gains
 nothing. `concurrency` multiplies with `runner_count`: three tasks of four workers is twelve
 requests at once, on twelve instance ids.
+
+## Scaling to zero
+
+By default the service runs `runner_count` tasks all month. Set `scaling` and it follows the work
+instead:
+
+```hcl
+module "sre_agent_fix_runner" {
+  # ...
+  concurrency = 2
+  scaling = {
+    min_runners  = 0   # no task, and no Fargate charge, while nothing is waiting
+    max_runners  = 4
+    idle_minutes = 10  # how long it stays idle before the last tasks stop
+  }
+  alarm_actions = [aws_sns_topic.oncall.arn]
+}
+```
+
+**What it adds.** A small Node 20 Lambda function (`scaler/index.mjs`, the only code this module
+ships) that EventBridge runs every minute. It reads your API key from `api_key_secret_arn`, asks SRE
+Agent `GET /api/fix_runner/demand` how many requests are waiting for a runner (`pending`) and how
+many are being worked (`running`), and sets the service's desired count to
+
+```
+clamp(ceil((pending + running) / concurrency), min_runners, max_runners)
+```
+
+It scales out at once. It scales in only after `idle_minutes` with nothing pending and nothing
+running, and then straight to `min_runners`; the time it has been idle is kept in an SSM parameter.
+It never stops a task itself: a task holds ECS scale-in protection while it works a request (the
+task role gains `ecs:GetTaskProtection` and `ecs:UpdateTaskProtection` on the tasks of this
+cluster), and a protected task is not stopped by a scale-in. The answer to the demand call is
+counts only, never a request's content, and the call is read-only: it leases nothing.
+The function logs one JSON line per decision to `/aws/lambda/<name_prefix>-scaler`.
+
+**The cold start is a cost you accept.** With `min_runners = 0` a request that arrives while no task
+runs waits for one to start: a Fargate start plus the image pull, about a minute, before the runner
+even polls. Set `min_runners = 1` to keep one task warm (you then pay for it all month, as with
+`runner_count = 1`) and scale only the burst above it. SRE Agent treats a runner that asked for
+demand in the last five minutes as live, so a request is queued for it rather than sent to SRE
+Agent's own runner while the task is starting; with the repository's `platform_fallback` on, a
+request still waiting after the usual retry window is taken over, and with it off it waits.
+
+**When it cannot scale.** If ECS refuses to start tasks (a quota, a subnet, the image) or SRE Agent
+cannot be reached or refuses the key, the function logs the reason and fails, and nothing else
+changes. The module creates a CloudWatch alarm on the function's errors (three five-minute periods,
+so a blip does not page) and notifies `alarm_actions`; with none given it only shows in the console.
+Meanwhile requests wait under the existing rules: the 45 minute backstop, then the
+`platform_fallback` setting.
+
+**Limits to know about.**
+
+- **Tasks still get the long-lived key.** The scaler reads `api_key_secret_arn`, and so does every
+  task it starts (`SRE_API_KEY`), as before. The runner can hold an expiring token instead of the
+  key (v2.5.0), but this module does not yet hand tasks one: distributing a token to started tasks
+  is a follow-up. Until then a task host holds the key, as it always has.
+- **The function runs outside any VPC** and calls `sre_agent_url` over the internet, so a SRE Agent
+  that is reachable only from a private network cannot be scaled this way.
+- **Terraform no longer owns the count.** The service is a different resource, named
+  `<name_prefix>-scaled`; `desired_count` is ignored after creation, so an apply never puts it back.
+  Switching an existing deployment between the fixed fleet and `scaling` replaces the service once
+  (its tasks stop and start); the two names are different so the replacement never has one name in
+  two services. `runner_count` must stay 1 while `scaling` is set.
+- **Several tasks need the pool layout.** With `max_runners` above 1 the task definition sets
+  `SRE_WORKSPACE_PER_INSTANCE=1` and `SRE_MEMORY_ROOT=/workspace/memory`, as for `runner_count` above 1,
+  and `extra_environment` cannot carry `SRE_RUNNER_INSTANCE`.
+- It needs a SRE Agent that serves the demand endpoint (an older one answers 404 and the scaler
+  fails with that, scaling nothing) and the v2.5.0 runner image or newer.
+- Scaling out is limited by the Fargate quota in your account and by the `max_runners` you set.
+  Each started task is another full `cpu` and `memory` for as long as it runs.
 
 ## opencode's own log
 
@@ -473,6 +545,8 @@ as root at the next start.
 | `cpu`, `memory` | `2048`, `8192` | Fargate sizing. A pair Fargate does not offer is refused at plan time. |
 | `ephemeral_storage_gib` | `30` | Scratch beside the volume, 21 to 200. |
 | `runner_count` | `1` | How many runner tasks run on the one volume. Above 1 the queue leases each job to the task that collects it, each task works under `instances/<its instance id>`, and the per-repository locks guard the shared memory. A pool needs the runner image v1.6.0 or newer. |
+| `scaling` | `null` | `{ min_runners = 0, max_runners, idle_minutes = 10 }`: scale the service with SRE Agent's demand through a Lambda scaler (see "Scaling to zero"). Null keeps the fixed fleet of `runner_count` tasks. `runner_count` must stay 1 with it. |
+| `alarm_actions` | `[]` | Notified when the scaler has failed for 15 minutes running. The alarm exists whenever `scaling` is set. |
 | `concurrency` | `1` | How many requests each task works on at once, 1 to 8 (`SRE_CONCURRENCY`). Each worker needs about 1 vCPU and 2 GiB of the task. Needs the runner image v2.5.0 or newer. |
 | `agent_aws_role_arn` | `null` | An IAM role the runner assumes for each request and gives the agent in place of the task role's credentials (`SRE_AGENT_AWS_ROLE_ARN`); the task role may assume exactly this role. Needs `agent_aws_access = true` and the runner image v2.5.0 or newer. |
 | `memory_bucket_name` | `null` | An existing bucket for the memory mirror. Null creates one. |
@@ -505,6 +579,7 @@ as root at the next start.
 | `task_role_arn`, `task_role_name` | The role the runner (and, with `agent_aws_access`, the agent) holds. |
 | `security_group_id`, `private_subnet_ids` | The task's group and subnets. |
 | `nat_public_ip` | The address the runner's traffic leaves from; null with an existing VPC. |
+| `scaler_function_name` | The scaler Lambda function when `scaling` is set; null otherwise. |
 
 ## Auditing what it did
 
@@ -524,6 +599,7 @@ on:
 | Item | About |
 |---|---|
 | Fargate, ARM64, 2 vCPU and 8 GiB, running all month | $68 per task: `runner_count` multiplies it |
+| With `scaling` and `min_runners = 0`: Fargate while tasks run | about $0.09 per task-hour at this size and nothing while no task runs; plus the scaler's Lambda (one short run a minute, a few cents a month at most), its log group and one SSM parameter. The NAT gateway, the volume and the other fixed items below stay |
 | NAT gateway (not with an existing VPC) | $33 plus $0.045 per GB it processes |
 | The NAT gateway's Elastic IP (a public IPv4 address) | $3.65 |
 | EFS | $0.30 per GB-month in standard storage, less in Infrequent Access; elastic throughput is billed per GB read and written |
@@ -542,3 +618,4 @@ key by your provider.
 |---|---|
 | Terraform | >= 1.5 |
 | `hashicorp/aws` | >= 5.0 |
+| `hashicorp/archive` | >= 2.0 (zips the scaler; used only with `scaling`) |
