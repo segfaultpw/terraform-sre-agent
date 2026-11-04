@@ -3105,8 +3105,8 @@ run "the_scaler_is_one_node_function_run_every_minute" {
   }
 
   assert {
-    condition     = aws_lambda_function.scaler[0].runtime == "nodejs20.x" && aws_lambda_function.scaler[0].handler == "index.handler"
-    error_message = "Node 20, index.handler"
+    condition     = aws_lambda_function.scaler[0].runtime == "nodejs24.x" && aws_lambda_function.scaler[0].handler == "index.handler"
+    error_message = "Node 24 (the current supported runtime), index.handler"
   }
 
   assert {

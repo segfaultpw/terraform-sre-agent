@@ -230,7 +230,7 @@ module "sre_agent_fix_runner" {
 }
 ```
 
-**What it adds.** A small Node 20 Lambda function (`scaler/index.mjs`, the only code this module
+**What it adds.** A small Node 24 Lambda function (`scaler/index.mjs`, the only code this module
 ships) that EventBridge runs every minute. It reads your API key from `api_key_secret_arn`, asks SRE
 Agent `GET /api/fix_runner/demand` how many requests are waiting for a runner (`pending`) and how
 many are being worked (`running`), and sets the service's desired count to
@@ -241,7 +241,10 @@ clamp(ceil((pending + running) / concurrency), min_runners, max_runners)
 
 It scales out at once. It scales in only after `idle_minutes` with nothing pending and nothing
 running, and then straight to `min_runners`; the time it has been idle is kept in an SSM parameter.
-It never stops a task itself: a task holds ECS scale-in protection while it works a request (the
+Just before it lowers the count it asks for the demand a second time and gives up if anything has
+arrived since, so a job issued a moment ago is not lost to a scale-in. A lowered `max_runners` takes
+effect on the next tick even while work keeps arriving: the count is cut to the new maximum, and a
+task that holds a request is protected, so the cut waits for it. The scaler never stops a task itself: a task holds ECS scale-in protection while it works a request (the
 task role gains `ecs:GetTaskProtection` and `ecs:UpdateTaskProtection` on the tasks of this
 cluster), and a protected task is not stopped by a scale-in. The answer to the demand call is
 counts only, never a request's content, and the call is read-only: it leases nothing.
@@ -255,9 +258,13 @@ demand in the last five minutes as live, so a request is queued for it rather th
 Agent's own runner while the task is starting; with the repository's `platform_fallback` on, a
 request still waiting after the usual retry window is taken over, and with it off it waits.
 
-**When it cannot scale.** If ECS refuses to start tasks (a quota, a subnet, the image) or SRE Agent
-cannot be reached or refuses the key, the function logs the reason and fails, and nothing else
-changes. The module creates a CloudWatch alarm on the function's errors (three five-minute periods,
+**When it cannot scale.** If ECS refuses to start tasks (a quota, a subnet, the image), SRE Agent
+cannot be reached or refuses the key, or the API key secret is unreadable or has a space or line
+break inside it, the function logs the reason and fails, and nothing else changes. A log line names
+the failing step and the error's name and HTTP status, never the error's own text (an HTTP client's
+message can quote the request, and the request carries the key). The SSM parameter is different: it
+only matters for scaling in, so when it cannot be read or written the function still scales out as
+usual, never scales in, and fails at the end of that invocation so the alarm shows it. The module creates a CloudWatch alarm on the function's errors (three five-minute periods,
 so a blip does not page) and notifies `alarm_actions`; with none given it only shows in the console.
 Meanwhile requests wait under the existing rules: the 45 minute backstop, then the
 `platform_fallback` setting.
@@ -278,6 +285,17 @@ Meanwhile requests wait under the existing rules: the 45 minute backstop, then t
 - **Several tasks need the pool layout.** With `max_runners` above 1 the task definition sets
   `SRE_WORKSPACE_PER_INSTANCE=1` and `SRE_MEMORY_ROOT=/workspace/memory`, as for `runner_count` above 1,
   and `extra_environment` cannot carry `SRE_RUNNER_INSTANCE`.
+- **`ecs:UpdateService` is granted on the service as a whole.** this module does not narrow it below
+  the service (IAM offers no per-field limit that was verified here), so whoever can change the scaler's code or environment can also repoint the service at
+  another task definition registered in the account. Treat write access to the function like write
+  access to the service.
+- **Task protection is granted on every task of the cluster.** `ecs:UpdateTaskProtection` and
+  `ecs:GetTaskProtection` are scoped to `task/<cluster>/*`, the tightest ARN ECS offers. On a shared
+  cluster (`cluster_arn`) that includes other services' tasks, and with `agent_aws_access = true` and
+  no `agent_aws_role_arn` the agent itself holds the task role and so this permission. Give the
+  runner a cluster of its own, or set `agent_aws_role_arn`, when that matters.
+- **The AWS provider must know the `nodejs24.x` runtime.** If a plan rejects it, run
+  `terraform init -upgrade`.
 - It needs a SRE Agent that serves the demand endpoint (an older one answers 404 and the scaler
   fails with that, scaling nothing) and the v2.5.0 runner image or newer.
 - Scaling out is limited by the Fargate quota in your account and by the `max_runners` you set.

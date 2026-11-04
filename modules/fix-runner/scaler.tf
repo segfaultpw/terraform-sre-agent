@@ -127,7 +127,7 @@ resource "aws_lambda_function" "scaler" {
   function_name    = local.scaler_name
   description      = "Sets the fix runner service's desired count from SRE Agent's demand"
   role             = aws_iam_role.scaler[0].arn
-  runtime          = "nodejs20.x"
+  runtime          = "nodejs24.x"
   handler          = "index.handler"
   filename         = data.archive_file.scaler[0].output_path
   source_code_hash = data.archive_file.scaler[0].output_base64sha256
@@ -188,14 +188,15 @@ resource "aws_lambda_permission" "scaler" {
   source_arn    = aws_cloudwatch_event_rule.scaler[0].arn
 }
 
-# The function raises when SRE Agent cannot be reached or refuses the key, and when ECS refuses to
-# change the service (a task quota, a subnet, the image), so a scaler that cannot start tasks shows
+# The function raises when SRE Agent cannot be reached or refuses the key, when ECS refuses to
+# change the service (a task quota, a subnet, the image), and, after it has scaled out, when its
+# SSM idle-clock parameter cannot be read or written, so a scaler that cannot start tasks shows
 # here. Nothing else changes meanwhile: a request waits under the usual rules.
 resource "aws_cloudwatch_metric_alarm" "scaler_errors" {
   count = local.scaled ? 1 : 0
 
   alarm_name          = "${local.scaler_name}-errors"
-  alarm_description   = "The fix runner scaler has failed for 15 minutes running: SRE Agent cannot be reached or refuses the API key, or ECS refuses to change the service. Read the scaler log group; no runner is started or stopped until it recovers, and requests wait under the usual rules."
+  alarm_description   = "The fix runner scaler has failed for 15 minutes running: SRE Agent cannot be reached or refuses the API key, the API key secret is unreadable or malformed, ECS refuses to change the service, or the SSM parameter that holds the idle clock cannot be read or written (the last still scales out but never scales in). Read the scaler log group; requests wait under the usual rules while it cannot scale."
   namespace           = "AWS/Lambda"
   metric_name         = "Errors"
   statistic           = "Sum"

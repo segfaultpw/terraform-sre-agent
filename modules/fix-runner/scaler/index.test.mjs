@@ -118,7 +118,7 @@ test("a network error and a 429 are retried", async () => {
 
 test("three failures end the call with the reason", async () => {
   const { fetchImpl, calls } = demandFetch([answer(500), answer(500), answer(502)]);
-  await assert.rejects(fetchDemand({ fetchImpl, sleep: noSleep, url: "https://sre.example.com", key: "k" }), /no demand after 3 attempts: the demand endpoint answered 502/);
+  await assert.rejects(fetchDemand({ fetchImpl, sleep: noSleep, url: "https://sre.example.com", key: "k" }), /no demand after 3 attempts \(last failure: HTTP 502\)/);
   assert.equal(calls.length, 3);
 });
 
@@ -138,7 +138,11 @@ test("an unreadable answer is not retried", async () => {
 
 const config = { url: "https://sre.example.com", secretArn: "arn:secret", cluster: "c", service: "s", idleParameter: "/p", min: 0, max: 4, concurrency: 1, idleMinutes: 10 };
 
-function fakeDeps({ responses, current = 0, idleSince = null, now = 1_000_000, setFails = false }) {
+function awsError(name, status, message) {
+  return Object.assign(new Error(message), { name, $metadata: { httpStatusCode: status } });
+}
+
+function fakeDeps({ responses, current = 0, idleSince = null, now = 1_000_000, setFails = false, getIdleFails = false, putIdleFails = false, secret = "  the-secret-key\n" }) {
   const { fetchImpl, calls } = demandFetch(responses);
   const state = { sets: [], idle: [], logs: [], calls, idleSince };
   const deps = {
@@ -146,15 +150,19 @@ function fakeDeps({ responses, current = 0, idleSince = null, now = 1_000_000, s
     sleep: noSleep,
     now: () => now,
     log: (line) => state.logs.push(line),
-    getSecret: async () => "  the-secret-key\n",
+    getSecret: async () => secret,
     getDesiredCount: async () => current,
-    getIdleSince: async () => state.idleSince,
+    getIdleSince: async () => {
+      if (getIdleFails) throw awsError("ParameterNotFound", 400, "parameter /secret/path not found");
+      return state.idleSince;
+    },
     putIdleSince: async (value) => {
+      if (putIdleFails) throw awsError("ThrottlingException", 400, "slow down");
       state.idle.push(value);
       state.idleSince = value;
     },
     setDesiredCount: async (count) => {
-      if (setFails) throw new Error("RunTask quota reached");
+      if (setFails) throw awsError("InvalidParameterException", 400, "RunTask quota reached");
       state.sets.push(count);
     },
   };
@@ -185,12 +193,16 @@ test("a demand 500 changes nothing and the run fails", async () => {
   assert.deepEqual(state.logs, []);
 });
 
-test("a service that cannot be scaled logs the reason and fails the run", async () => {
+test("a service that cannot be scaled logs the error's name and status, never its message, and fails the run", async () => {
   const { deps, state } = fakeDeps({ responses: [answer(200, { pending: 1, running: 0 })], setFails: true });
-  await assert.rejects(run(deps, config), /RunTask quota reached/);
+  await assert.rejects(run(deps, config), (error) => {
+    assert.equal(error.message, "scaling the service failed (InvalidParameterException (HTTP 400))");
+    return true;
+  });
   const failure = state.logs.find((line) => line.level === "error");
-  assert.equal(failure.msg, "the service could not be scaled");
-  assert.equal(failure.error, "RunTask quota reached");
+  assert.equal(failure.msg, "scaling the service failed");
+  assert.equal(failure.error, "InvalidParameterException (HTTP 400)");
+  assert.ok(!JSON.stringify(state.logs).includes("RunTask quota"));
 });
 
 test("the idle mark is written when the clock starts and cleared when work returns", async () => {
@@ -205,7 +217,7 @@ test("the idle mark is written when the clock starts and cleared when work retur
 });
 
 test("a long idle scales in once and clears the mark", async () => {
-  const { deps, state } = fakeDeps({ responses: [answer(200)], current: 2, idleSince: 1_000_000 - 11 * MINUTE });
+  const { deps, state } = fakeDeps({ responses: [answer(200), answer(200)], current: 2, idleSince: 1_000_000 - 11 * MINUTE });
   const result = await run(deps, config);
   assert.equal(result.action, "scale_in");
   assert.deepEqual(state.sets, [0]);
@@ -243,4 +255,134 @@ test("a missing or malformed setting refuses to run", () => {
   assert.throws(() => readConfig({ ...env, MAX_RUNNERS: "x" }), /MAX_RUNNERS/);
   assert.throws(() => readConfig({ ...env, CONCURRENCY: "0" }), /CONCURRENCY/);
   assert.throws(() => readConfig({ ...env, MIN_RUNNERS: "4" }), /MAX_RUNNERS at least MIN_RUNNERS/);
+});
+
+// A lowered max_runners applies at once.
+
+test("a count above a lowered maximum is cut to it, even while work keeps arriving", () => {
+  const d = decide({ ...base, pending: 1, running: 5, current: 6, max: 2 });
+  assert.deepEqual(d, { desired: 2, idleSince: null, action: "cap", reason: "above max_runners" });
+});
+
+test("a count above a lowered maximum is cut to it when idle, keeping the idle mark", () => {
+  const d = decide({ ...base, current: 6, max: 2, idleSince: 777 });
+  assert.equal(d.desired, 2);
+  assert.equal(d.idleSince, 777);
+  assert.equal(d.action, "cap");
+});
+
+// The idle clock is best effort for everything but scaling in.
+
+test("an unreadable idle clock never blocks a scale-out", async () => {
+  const { deps, state } = fakeDeps({ responses: [answer(200, { pending: 2, running: 0 })], current: 0, getIdleFails: true });
+  await assert.rejects(run(deps, config), /idle clock parameter is unavailable \(ParameterNotFound \(HTTP 400\)\); scaling out is unaffected/);
+  assert.deepEqual(state.sets, [2]);
+});
+
+test("an unreadable idle clock never scales in", async () => {
+  const { deps, state } = fakeDeps({ responses: [answer(200)], current: 3, getIdleFails: true, idleSince: 1_000_000 - 60 * MINUTE });
+  await assert.rejects(run(deps, config), /idle clock parameter is unavailable/);
+  assert.deepEqual(state.sets, []);
+  assert.equal(state.calls.length, 1);
+});
+
+test("an unwritable idle clock does not stop the scale-out that came first", async () => {
+  const { deps, state } = fakeDeps({ responses: [answer(200, { pending: 1, running: 0 })], current: 0, idleSince: 5, putIdleFails: true });
+  await assert.rejects(run(deps, config), /idle clock parameter is unavailable \(ThrottlingException \(HTTP 400\)\)/);
+  assert.deepEqual(state.sets, [1]);
+});
+
+test("an unwritable idle clock does not stop a scale-in", async () => {
+  const { deps, state } = fakeDeps({ responses: [answer(200), answer(200)], current: 2, idleSince: 1_000_000 - 11 * MINUTE, putIdleFails: true });
+  await assert.rejects(run(deps, config), /idle clock parameter is unavailable/);
+  assert.deepEqual(state.sets, [0]);
+});
+
+test("the SSM error's message never reaches a log line or the thrown error", async () => {
+  const { deps, state } = fakeDeps({ responses: [answer(200, { pending: 1, running: 0 })], getIdleFails: true });
+  await assert.rejects(run(deps, config), (error) => !error.message.includes("/secret/path"));
+  assert.ok(!JSON.stringify(state.logs).includes("/secret/path"));
+});
+
+// A scale-in looks at demand again right before it acts.
+
+test("work that arrives between the reads cancels the scale-in", async () => {
+  const { deps, state } = fakeDeps({ responses: [answer(200), answer(200, { pending: 1, running: 0 })], current: 2, idleSince: 1_000_000 - 11 * MINUTE });
+  const result = await run(deps, config);
+  assert.equal(result.action, "hold");
+  assert.equal(result.reason, "work arrived before the scale-in");
+  assert.deepEqual(state.sets, []);
+  assert.deepEqual(state.idle, [null]);
+  assert.equal(state.logs.filter((line) => line.msg === "decision").length, 1);
+  assert.equal(state.logs.find((line) => line.msg === "decision").pending, 1);
+});
+
+test("a demand call that fails right before a scale-in leaves the service alone", async () => {
+  const { deps, state } = fakeDeps({ responses: [answer(200), answer(500), answer(500), answer(500)], current: 2, idleSince: 1_000_000 - 11 * MINUTE });
+  await assert.rejects(run(deps, config), /no demand/);
+  assert.deepEqual(state.sets, []);
+});
+
+test("a scale-out does not read demand a second time", async () => {
+  const { deps, state } = fakeDeps({ responses: [answer(200, { pending: 1, running: 0 })], current: 0 });
+  await run(deps, config);
+  assert.equal(state.calls.length, 1);
+});
+
+// The key never reaches a log, whatever the fetch says.
+
+test("a key with an inner line break is refused without a trace of it in any log or error", async () => {
+  const planted = "abc\ndef-planted-key";
+  const fetchLeaks = async (url, options) => {
+    throw new TypeError(`Headers.append: "${options.headers.authorization}" is an invalid header value.`);
+  };
+  const { deps, state } = fakeDeps({ responses: [], secret: planted });
+  deps.fetch = fetchLeaks;
+  await assert.rejects(run(deps, config), (error) => {
+    assert.ok(!error.message.includes("abc"));
+    assert.ok(!error.message.includes("planted"));
+    assert.match(error.message, /cannot be sent in a header/);
+    return true;
+  });
+  assert.ok(!JSON.stringify(state.logs).includes("planted"));
+  assert.deepEqual(state.sets, []);
+});
+
+test("an empty or spaced key is refused", async () => {
+  for (const secret of ["", "   \n", "two words", "tab\there", "nul\u0000byte", "café"]) {
+    const { deps } = fakeDeps({ responses: [], secret });
+    await assert.rejects(run(deps, config), /cannot be sent in a header/);
+  }
+});
+
+test("a fetch that throws a message quoting the key is retried and then reported by name only", async () => {
+  const { deps, state } = fakeDeps({ responses: [], secret: "valid-key-123" });
+  deps.fetch = async (url, options) => {
+    throw Object.assign(new Error(`connect failed for ${options.headers.authorization}`), { name: "FetchError" });
+  };
+  await assert.rejects(run(deps, config), (error) => {
+    assert.equal(error.message, "no demand after 3 attempts (last failure: FetchError)");
+    return true;
+  });
+  assert.ok(!JSON.stringify(state.logs).includes("valid-key-123"));
+});
+
+test("an unreadable secret is reported by name, not message", async () => {
+  const { deps, state } = fakeDeps({ responses: [] });
+  deps.getSecret = async () => {
+    throw awsError("AccessDeniedException", 400, "User arn:aws:iam::1:role/x is not authorized");
+  };
+  await assert.rejects(run(deps, config), (error) => {
+    assert.equal(error.message, "reading the API key secret failed (AccessDeniedException (HTTP 400))");
+    return true;
+  });
+  assert.ok(!JSON.stringify(state.logs).includes("not authorized"));
+});
+
+test("an answer that is not JSON is refused with fixed text", async () => {
+  const { fetchImpl } = demandFetch([{ status: 200, ok: true, json: async () => { throw new SyntaxError("Unexpected token < in <html>secret</html>"); } }]);
+  await assert.rejects(fetchDemand({ fetchImpl, sleep: noSleep, url: "https://sre.example.com", key: "k" }), (error) => {
+    assert.equal(error.message, "the demand endpoint answered something that is not JSON");
+    return true;
+  });
 });

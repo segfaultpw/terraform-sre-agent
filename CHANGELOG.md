@@ -21,16 +21,22 @@ variables.
 
 ### Added
 - `fix-runner`: `scaling = { min_runners, max_runners, idle_minutes }` (default null, the fixed
-  fleet). It adds a Node 20 Lambda function, run every minute, that asks SRE Agent how much work is
-  waiting (`GET /api/fix_runner/demand`, counts only) and sets the service's desired count to
+  fleet). It adds a Node 24 Lambda function (`nodejs24.x`), run every minute, that asks SRE Agent how much
+  work is waiting (`GET /api/fix_runner/demand`, counts only) and sets the service's desired count to
   `clamp(ceil((pending + running) / concurrency), min_runners, max_runners)`. It scales out at once
-  and scales in only after `idle_minutes` with nothing pending or running. A CloudWatch alarm on the
-  function's errors (notifying `alarm_actions`) shows a scaler that cannot reach SRE Agent or cannot
-  start tasks. **Cold start:** with `min_runners = 0` the first request after an idle spell waits
-  about a minute for a Fargate task to start and pull the image; `min_runners = 1` keeps one warm.
+  and scales in only after `idle_minutes` with nothing pending or running, after asking for the
+  demand once more right before lowering the count. Scaling out never depends on the SSM parameter
+  that keeps the idle clock: if it cannot be read or written the service still scales out, never
+  scales in, and the invocation fails at its end. A lowered `max_runners` applies on the next tick
+  even while work arrives. The function logs error names and HTTP statuses only, never an error's
+  message, and refuses an API key that has a space or line break inside it. A CloudWatch alarm on
+  the function's errors (notifying `alarm_actions`) shows a scaler that cannot reach SRE Agent,
+  cannot read the key, cannot start tasks or cannot use its SSM parameter. **Cold start:** with
+  `min_runners = 0` the first request after an idle spell waits about a minute for a Fargate task to start and pull the image; `min_runners = 1` keeps one warm.
   **Limit:** tasks still receive the long-lived API key from `api_key_secret_arn`, as before;
   handing tasks an expiring token instead is a follow-up. The function runs outside any VPC, so SRE
-  Agent must be reachable from the internet.
+  Agent must be reachable from the internet. `ecs:UpdateService` is granted on the whole service
+  and task protection on every task of the cluster; see the README.
 - `fix-runner`: `concurrency` (1 to 8, default 1) sets `SRE_CONCURRENCY`: that many requests at
   once in each task, each worker with its own workspace under the per-instance layout. A plan-time
   check warns when the task is smaller than about 1 vCPU and 2 GiB per worker.
