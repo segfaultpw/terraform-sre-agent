@@ -106,3 +106,27 @@ run "deprecated_switches_left_alone_raise_no_warning" {
     error_message = "the deprecated switches must default to false"
   }
 }
+
+# The IAM scan reads an account in a few calls with iam:GetAccountAuthorizationDetails, and
+# Capacity and FinOps read CloudWatch with cloudwatch:GetMetricData. The module needs no new
+# action for either, because its identity group already grants iam:Get* and its observability
+# group cloudwatch:Get*; this pins that the defaults keep granting them.
+run "identity_read_covers_the_bulk_iam_read" {
+  command = apply
+
+  assert {
+    condition = length([
+      for s in jsondecode(data.aws_iam_policy_document.readonly.json).Statement :
+      s if contains(flatten([s.Action]), "iam:Get*") || contains(flatten([s.Action]), "iam:GetAccountAuthorizationDetails")
+    ]) > 0
+    error_message = "no statement grants iam:Get*, which covers iam:GetAccountAuthorizationDetails"
+  }
+
+  assert {
+    condition = length([
+      for s in jsondecode(data.aws_iam_policy_document.readonly.json).Statement :
+      s if contains(flatten([s.Action]), "cloudwatch:Get*") || contains(flatten([s.Action]), "cloudwatch:GetMetricData")
+    ]) > 0
+    error_message = "no statement grants cloudwatch:Get*, which covers cloudwatch:GetMetricData"
+  }
+}

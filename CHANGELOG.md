@@ -8,6 +8,13 @@ than a `terraform apply`.
 - **minor**: a permission added, because the product gained a feature needing it
 - **patch**: documentation, validation, formatting; no change to what is granted
 
+## [4.13.2]
+
+No change to what the module grants. A test now pins that the identity group's `iam:Get*` covers
+`iam:GetAccountAuthorizationDetails`, which the IAM scan uses to read an account in a few paged calls, and
+that the observability group's `cloudwatch:Get*` covers `cloudwatch:GetMetricData`, which Capacity and
+FinOps use to read many series in one call. The `aws-readonly` README names the first.
+
 ## [4.13.1]
 
 No change to what the module creates or grants: the same module as 4.13.0, whose CI could not finish.
