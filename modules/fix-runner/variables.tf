@@ -310,7 +310,9 @@ variable "provider_key_secret_arns" {
     CEREBRAS_API_KEY, moonshotai MOONSHOT_API_KEY, deepinfra DEEPINFRA_API_KEY, huggingface HF_TOKEN,
     zai ZHIPU_API_KEY, minimax MINIMAX_API_KEY, nvidia NVIDIA_API_KEY, opencode OPENCODE_API_KEY,
     vercel AI_GATEWAY_API_KEY. For one of those providers the module refuses a map that lacks the
-    key sre_model needs. The agent holds this key too (opencode calls the model with it).
+    key sre_model needs. The agent holds this key too (opencode calls the model with it). The names
+    that start with OPENCODE_ are refused, except OPENCODE_API_KEY, which is the opencode provider's
+    own key.
   EOT
 
   validation {
@@ -323,14 +325,47 @@ variable "provider_key_secret_arns" {
       for name in keys(var.provider_key_secret_arns) :
       can(regex("^[A-Z][A-Z0-9_]*$", name)) && !startswith(name, "SRE_") && !startswith(name, "AWS_")
       && !contains(["PATH", "HOME", "ENV", "BASH_ENV", "NODE_OPTIONS", "NODE_PATH"], name)
-      && !startswith(name, "LD_") && !startswith(name, "GIT_") && !startswith(name, "OPENCODE_")
+      && !startswith(name, "LD_") && !startswith(name, "GIT_") && (!startswith(name, "OPENCODE_") || name == "OPENCODE_API_KEY")
     ])
-    error_message = "Every provider_key_secret_arns key must be an upper-case environment variable name that does not start with SRE_ or AWS_ (those are the runner's own and the task's own) and is not one of the names that move the boundary between the runner and the agent (PATH, HOME, ENV, BASH_ENV, NODE_OPTIONS, NODE_PATH, or any LD_*, GIT_* or OPENCODE_* name)."
+    error_message = "Every provider_key_secret_arns key must be an upper-case environment variable name that does not start with SRE_ or AWS_ (those are the runner's own and the task's own) and is not one of the names that move the boundary between the runner and the agent (PATH, HOME, ENV, BASH_ENV, NODE_OPTIONS, NODE_PATH, or any LD_*, GIT_* or OPENCODE_* name). The one exception is OPENCODE_API_KEY, the key of the opencode provider, which is admitted by that exact name."
   }
 
   validation {
     condition     = alltrue([for arn in values(var.provider_key_secret_arns) : can(regex("^arn:aws[a-z-]*:secretsmanager:[a-z0-9-]+:[0-9]{12}:secret:[A-Za-z0-9/_+=.@-]+-[A-Za-z0-9]{6}$", arn))])
     error_message = "Every provider_key_secret_arns value must be the full Secrets Manager secret ARN, including the six-character suffix, never the key itself."
+  }
+}
+
+variable "model_fallback" {
+  type = object({
+    model          = string
+    key_secret_arn = string
+  })
+  description = <<-EOT
+    A second model and its key, { model = "provider/model", key_secret_arn = "<full secret ARN>" }.
+    When the first model's provider refuses a request before anything was changed (a key it does
+    not accept, no credit, over quota, a rate limit, a model it does not have), the runner runs the
+    same request again on this model, on the same machine and inside the same time budget. The
+    model becomes SRE_MODEL_FALLBACK and the secret becomes SRE_MODEL_FALLBACK_KEY, which reaches
+    the runner as a container secret and never as plain environment; the execution role may read
+    that one ARN. Any provider prefix the runner maps (the list under provider_key_secret_arns);
+    an unmapped prefix is refused at plan time, because the runner could not tell which variable
+    the key goes in. The same provider on another account works: give it its own secret. The same
+    model with the same key as sre_model is refused, because whatever refuses the first would
+    refuse the second. Each run holds one provider key, never both. Needs the sre-agent-opencode
+    v2.7.0 runner image or newer: an older image ignores both variables. Null (the default) sets
+    nothing and the task definition is the one this module has always had.
+  EOT
+  default     = null
+
+  validation {
+    condition     = var.model_fallback == null ? true : can(regex("^[a-z0-9][a-z0-9-]*/[^/[:space:]][^[:space:]]*$", var.model_fallback.model))
+    error_message = "model_fallback.model must be provider/model, for example openai/gpt-5."
+  }
+
+  validation {
+    condition     = var.model_fallback == null ? true : can(regex("^arn:aws[a-z-]*:secretsmanager:[a-z0-9-]+:[0-9]{12}:secret:[A-Za-z0-9/_+=.@-]+-[A-Za-z0-9]{6}$", var.model_fallback.key_secret_arn))
+    error_message = "model_fallback.key_secret_arn must be the full Secrets Manager secret ARN, including the six-character suffix, never the key itself."
   }
 }
 
@@ -421,7 +456,8 @@ variable "extra_environment" {
     (github_app_id set) SRE_GITHUB_APP_ID is the module's own as well and is refused (it sets it
     from github_app_id); SRE_GITHUB_APP_PRIVATE_KEY is refused in every mode, because its name is
     credential-shaped. SRE_CONCURRENCY and SRE_AGENT_AWS_ROLE_ARN are the module's own (concurrency
-    and agent_aws_role_arn) and are refused. SRE_HOOKS_DIR, SRE_HOOK_TIMEOUT_SECONDS and
+    and agent_aws_role_arn) and are refused, and so are SRE_MODEL_FALLBACK and SRE_MODEL_FALLBACK_KEY
+    (model_fallback sets the first and carries the second as a secret). SRE_HOOKS_DIR, SRE_HOOK_TIMEOUT_SECONDS and
     SRE_TASK_PROTECTION are yours to set; SRE_HOOKS_DIR must be an absolute path in the image,
     never under /workspace, like SRE_RUNNER_SETUP. With runner_count or concurrency above 1,
     SRE_WORKSPACE_PER_INSTANCE and SRE_MEMORY_ROOT are the module's own as well and are refused
@@ -447,9 +483,10 @@ variable "extra_environment" {
         "SRE_AGENT_AWS_ACCESS", "SRE_ONCE", "AWS_REGION", "AWS_DEFAULT_REGION",
         "SRE_API_KEY", "SRE_GITHUB_TOKEN", "SRE_AGENT_GITHUB_TOKEN",
         "SRE_CONCURRENCY", "SRE_AGENT_AWS_ROLE_ARN",
+        "SRE_MODEL_FALLBACK", "SRE_MODEL_FALLBACK_KEY",
       ], name)
     ])
-    error_message = "extra_environment cannot set SRE_SERVER_URL, SRE_MODEL, SRE_WORKSPACE, SRE_MEMORY_BUCKET, SRE_MEMORY_PREFIX, SRE_AGENT_AWS_ACCESS, SRE_CONCURRENCY, SRE_AGENT_AWS_ROLE_ARN, AWS_REGION or AWS_DEFAULT_REGION (this module sets them from its own variables), SRE_API_KEY, SRE_GITHUB_TOKEN or SRE_AGENT_GITHUB_TOKEN (secrets), or SRE_ONCE (the runner would exit after one poll and ECS would restart it in a loop)."
+    error_message = "extra_environment cannot set SRE_SERVER_URL, SRE_MODEL, SRE_MODEL_FALLBACK (model_fallback sets it, and SRE_MODEL_FALLBACK_KEY is its secret), SRE_WORKSPACE, SRE_MEMORY_BUCKET, SRE_MEMORY_PREFIX, SRE_AGENT_AWS_ACCESS, SRE_CONCURRENCY, SRE_AGENT_AWS_ROLE_ARN, AWS_REGION or AWS_DEFAULT_REGION (this module sets them from its own variables), SRE_API_KEY, SRE_GITHUB_TOKEN or SRE_AGENT_GITHUB_TOKEN (secrets), or SRE_ONCE (the runner would exit after one poll and ECS would restart it in a loop)."
   }
 
   validation {

@@ -8,6 +8,35 @@ than a `terraform apply`.
 - **minor**: a permission added, because the product gained a feature needing it
 - **patch**: documentation, validation, formatting; no change to what is granted
 
+## [4.14.0]
+
+The `fix-runner` module can give the runner a second model and key. A plan that does not set
+`model_fallback` is unchanged: same service, same task definition, same task role.
+
+The new variable needs the `sre-agent-opencode` **v2.7.0** runner image or newer. An older image
+ignores `SRE_MODEL_FALLBACK` and `SRE_MODEL_FALLBACK_KEY`. This version of the module still defaults
+to the v2.5.0 image; the default moves to v2.7.0 once that image is published, so set `image` to the
+v2.7.0 digest to use the second model today.
+
+### Added
+- `fix-runner`: `model_fallback = { model, key_secret_arn }` (default null). The model becomes
+  `SRE_MODEL_FALLBACK` (plain environment) and the key's secret becomes `SRE_MODEL_FALLBACK_KEY` (a
+  container secret, never plain environment). **The execution role may read one more secret when the
+  variable is set**, which is why this is a minor version. When the first model's provider refuses a
+  request before anything was changed, the runner runs it again on this model on the same machine.
+  Two plan-time refusals: a model whose provider prefix the runner does not map, and the same model
+  with the same key secret as `sre_model`. The same provider on another account, and the same secret
+  with another model, are allowed.
+- `fix-runner`: `provider_key_secret_arns` admits `OPENCODE_API_KEY`, the key of the `opencode`
+  provider, by that exact name. It was refused before, because the whole `OPENCODE_` prefix is.
+  Every other `OPENCODE_`, `SRE_` and `AWS_` name is still refused.
+
+### Changed
+- `fix-runner`: `extra_environment` also refuses `SRE_MODEL_FALLBACK` and `SRE_MODEL_FALLBACK_KEY`,
+  which the module sets itself. A configuration that carried either name there (the key as plain
+  task environment would have been readable in the task definition) now fails to plan: use
+  `model_fallback`.
+
 ## [4.13.2]
 
 No change to what the module grants. A test now pins that the identity group's `iam:Get*` covers

@@ -139,6 +139,9 @@ locals {
     var.agent_github_token_secret_arn == null ? {} : { SRE_AGENT_GITHUB_TOKEN = var.agent_github_token_secret_arn },
     var.github_app_private_key_secret_arn == null ? {} : { SRE_GITHUB_APP_PRIVATE_KEY = var.github_app_private_key_secret_arn },
     var.provider_key_secret_arns,
+    # The second model's key has its own variable so the second model can be the same provider on
+    # another account. It is a container secret like every other key, never plain environment.
+    var.model_fallback == null ? {} : { SRE_MODEL_FALLBACK_KEY = var.model_fallback.key_secret_arn },
   )
   secret_arns = sort(distinct(values(local.secret_env)))
 
@@ -167,7 +170,13 @@ locals {
     # Absent at 1, like the layout above, so a plan with none of the new variables is unchanged.
     var.concurrency > 1 ? { SRE_CONCURRENCY = tostring(var.concurrency) } : {},
     var.agent_aws_role_arn == null ? {} : { SRE_AGENT_AWS_ROLE_ARN = var.agent_aws_role_arn },
+    var.model_fallback == null ? {} : { SRE_MODEL_FALLBACK = var.model_fallback.model },
   )
+
+  # The fallback's provider prefix (empty without a fallback), and the variable its key goes in
+  # (null without a fallback or for a prefix the table above does not hold).
+  fallback_provider_prefix = var.model_fallback == null ? "" : split("/", var.model_fallback.model)[0]
+  fallback_provider_key    = lookup(local.provider_key_variable, local.fallback_provider_prefix, null)
 
   # ECS tasks are the principal whose assumption AWS documents the confused-deputy keys for.
   ecs_tasks_assume_role_policy = jsonencode({
@@ -826,6 +835,25 @@ resource "aws_ecs_task_definition" "this" {
       # contains() with a null value raises instead of answering.
       condition     = local.expected_provider_key == null ? true : contains(keys(var.provider_key_secret_arns), local.expected_provider_key)
       error_message = "sre_model ${var.sre_model} reads its key from ${coalesce(local.expected_provider_key, "its provider's variable")}, which provider_key_secret_arns does not hold. Add it, or the agent would call the model with no key."
+    }
+
+    precondition {
+      # A conditional, not ||, as above. The second model's key is put under its provider's
+      # variable name by the runner, which can only do so for a prefix it maps.
+      condition     = var.model_fallback == null ? true : local.fallback_provider_key != null
+      error_message = "model_fallback.model ${try(var.model_fallback.model, "")} names the provider prefix ${local.fallback_provider_prefix}, which the runner does not map, so it could not tell which variable the key goes in; use one of the prefixes provider_key_secret_arns lists."
+    }
+
+    precondition {
+      # The same model with the same secret fails the same way, so the second run would be a waste.
+      # The same secret with another model is allowed (a model that was not found, or a rate limit
+      # on one model, does not refuse the other), and so is the same model with another secret.
+      condition = var.model_fallback == null ? true : !(
+        var.model_fallback.model == var.sre_model
+        && local.expected_provider_key != null
+        && lookup(var.provider_key_secret_arns, coalesce(local.expected_provider_key, "-"), "") == var.model_fallback.key_secret_arn
+      )
+      error_message = "model_fallback is sre_model with the same key secret, so whatever refuses the first model would refuse the second; give it another key or another model."
     }
 
     precondition {

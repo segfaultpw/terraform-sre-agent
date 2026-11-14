@@ -124,6 +124,56 @@ module "sre_agent_fix_runner" {
    that repository. Requests that name no repository go to the runner whenever it is live. The
    Integrations card shows **Polling now** within a minute of the task starting.
 
+## A second model
+
+`model_fallback` gives the runner a second model and key of your own. When the first model's
+provider refuses a request (a key it does not accept, no credit, over quota, a rate limit, or a
+model it does not have) before the agent changed anything, the runner starts the same request again
+on the second model, on the same machine and inside the same time budget. Only when that is refused
+too does the request fail, or move on to the take-over your repository's `platform_fallback`
+setting allows. The card, the Control Tower and the fix queue say which model did the work. Nothing
+of SRE Agent's ever reaches your machine: the second key is yours.
+
+```hcl
+data "aws_secretsmanager_secret" "openai" { name = "sre-fix-runner-openai" }
+
+module "sre_agent_fix_runner" {
+  # ...
+
+  sre_model = "anthropic/claude-sonnet-4-5"
+  provider_key_secret_arns = {
+    ANTHROPIC_API_KEY = data.aws_secretsmanager_secret.anthropic.arn
+  }
+
+  model_fallback = {
+    model          = "openai/gpt-5"
+    key_secret_arn = data.aws_secretsmanager_secret.openai.arn
+  }
+}
+```
+
+Create the secret the way the others are created (plain string, no trailing newline), in the Region
+you deploy to. What the module checks at plan time:
+
+- `model_fallback.model` is `provider/model`, and `key_secret_arn` is a full Secrets Manager ARN
+  with its six-character suffix.
+- The model's provider prefix is one the runner maps (the prefixes listed under
+  `provider_key_secret_arns`). The runner puts the second key under that provider's variable name
+  for the second run alone, so an unmapped prefix is refused.
+- The second model is not `sre_model` with the same key secret: whatever refused the first would
+  refuse the second. The same provider on another account (another secret) is allowed, and so is
+  the same secret with another model, which helps for a model the account does not have or a rate
+  limit on one model.
+- `SRE_MODEL_FALLBACK` and `SRE_MODEL_FALLBACK_KEY` are the module's own: `extra_environment`
+  refuses both names.
+
+The key is a container secret like every other key (the execution role may read that one ARN, and
+the key is never in the task definition's plain environment). Each run holds one provider key, the
+one for the model it runs: the first run never holds the second key and the second run never holds
+the first. A credentials hook that sets a provider variable is outside what the module can see.
+This needs the **v2.7.0** runner image or newer; an older image ignores both variables, and the
+execution role then reads one more secret that nothing uses.
+
 ## What it builds
 
 | Resource | Notes |
@@ -425,7 +475,7 @@ cannot install system packages; and it has no AWS credentials unless you opt in.
   limits ports, not destinations, because the image pull, the log delivery, the poll, GitHub, the
   model provider and the package registries are hosts the module cannot name.
 - **What it holds.** The model provider key stays in the agent's environment (opencode calls the
-  model with it), and so does a GitHub token, because your repositories are private and the agent
+  model with it; with `model_fallback` each run holds only the key of the model it runs, never both), and so does a GitHub token, because your repositories are private and the agent
   clones them as a CI job does. Without `agent_github_token_secret_arn` that token is the runner's
   own, which can push, and only the package's command fence on `git push` stands between the agent
   and a push to any repository that token reaches; the fence is a speed bump, because an
@@ -587,7 +637,8 @@ makes the runner assume that role for each request and give the agent its short-
 | `github_app_id` | `null` | The numeric id of a GitHub App. With `github_app_private_key_secret_arn` it selects App mode: the task definition sets `SRE_GITHUB_APP_ID` plain and the runner mints short-lived installation tokens per request. Needs the runner image v1.7.0 or newer. |
 | `github_app_private_key_secret_arn` | `null` | Full ARN of the secret holding the App's private key PEM (the `.pem` file as downloaded). Becomes `SRE_GITHUB_APP_PRIVATE_KEY`. |
 | `github_token_secret_arn` | required in the token shape | Full ARN of the secret holding the token the runner publishes with. Becomes `SRE_GITHUB_TOKEN`. One GitHub shape exactly: this (with its agent counterpart) or the App pair above; both together and neither at all are refused. |
-| `provider_key_secret_arns` | required | Environment variable name to the full ARN of the provider's key secret, for example `OPENROUTER_API_KEY`. For a provider the package maps, the key `sre_model` needs must be present. |
+| `provider_key_secret_arns` | required | Environment variable name to the full ARN of the provider's key secret, for example `OPENROUTER_API_KEY`. For a provider the package maps, the key `sre_model` needs must be present. `OPENCODE_API_KEY` (the `opencode` provider's key) is admitted by that exact name; every other `OPENCODE_`, `SRE_` and `AWS_` name is refused. |
+| `model_fallback` | `null` | A second model and its key, `{ model, key_secret_arn }`: when the first model's provider refuses a request before anything changed, the runner runs it again on this one. Any prefix the runner maps (the list under `provider_key_secret_arns`); the same provider on another account works. Becomes `SRE_MODEL_FALLBACK` and the secret `SRE_MODEL_FALLBACK_KEY`. Needs the v2.7.0 runner image or newer: an older image ignores both. See "A second model". |
 | `agent_github_token_secret_arn` | `null` | A read-only token for the agent alone (`SRE_AGENT_GITHUB_TOKEN`), in the token shape only. Null omits it, and the agent holds the runner's token. |
 | `secrets_kms_key_arn` | `null` | The customer-managed key behind the secrets, so the execution role may decrypt them through Secrets Manager. Every secret must be in the deploy Region. |
 | `agent_aws_access` | `false` | `true` sets `SRE_AGENT_AWS_ACCESS=1`: the agent holds the task role. |
