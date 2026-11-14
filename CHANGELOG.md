@@ -8,6 +8,20 @@ than a `terraform apply`.
 - **minor**: a permission added, because the product gained a feature needing it
 - **patch**: documentation, validation, formatting; no change to what is granted
 
+## [4.14.1]
+
+The default `image` of the `fix-runner` module is now the `sre-agent-opencode` **v2.7.1** runner
+(`ghcr.io/segfaultpw/sre-agent-opencode-runner@sha256:d33769851b2351851bec429efedf4d59e0761f8ed772b4d65cbc3eca1017de46`).
+A plan that does not set `image` changes one thing: the task definition's image. Nothing granted
+changes, which is why this is a patch version.
+
+### Changed
+- `fix-runner`: the default `image` moves from the v2.7.0 runner to v2.7.1. The newer runner masks
+  more forms of a credential in the words of an AI provider's refusal before it reports them
+  (unassigned and filler characters inside a key, a name percent encoded twice), and tells more
+  refusals apart, an HTTP 403 about a model or a security token among them (the runner's v2.7.1
+  changelog lists each).
+
 ## [4.14.0]
 
 The `fix-runner` module can give the runner a second model and key. A plan that does not set
