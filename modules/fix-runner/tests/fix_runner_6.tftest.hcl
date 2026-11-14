@@ -169,6 +169,32 @@ run "a_second_model_is_a_variable_and_a_secret" {
   }
 }
 
+run "a_customer_managed_key_decrypts_the_second_key_too" {
+  command = apply
+
+  variables {
+    secrets_kms_key_arn = "arn:aws:kms:us-east-1:123456789012:key/11111111-2222-3333-4444-555555555555"
+    model_fallback = {
+      model          = "openai/gpt-5"
+      key_secret_arn = "arn:aws:secretsmanager:us-east-1:123456789012:secret:openai-key-StUvWx"
+    }
+  }
+
+  assert {
+    condition = contains([
+      for s in jsondecode(aws_iam_role_policy.execution.policy).Statement : s.Condition.StringEquals["kms:EncryptionContext:SecretARN"] if s.Sid == "DecryptTheSecrets"
+    ][0], "arn:aws:secretsmanager:us-east-1:123456789012:secret:openai-key-StUvWx")
+    error_message = "the customer managed key may decrypt the second key's secret"
+  }
+
+  assert {
+    condition = length([
+      for s in jsondecode(aws_iam_role_policy.execution.policy).Statement : s.Condition.StringEquals["kms:EncryptionContext:SecretARN"] if s.Sid == "DecryptTheSecrets"
+    ][0]) == 4
+    error_message = "and only that one more"
+  }
+}
+
 run "the_same_model_with_another_key_is_planned" {
   command = apply
 

@@ -905,7 +905,7 @@ resource "aws_ecs_task_definition" "this" {
       # identity would make every lock in the pool name one instance, so the
       # liveness check could not tell one task's work from another's.
       # The pool also cannot start on an image that cannot lease: the default
-      # image is the v1.6.0 runner, and an explicit older digest is refused
+      # image is a runner that leases, and an explicit v1.5.0 digest is refused
       # rather than silently running a pool with no leases and one memory
       # tree.
       # The DIGEST is compared, not the whole reference: the image variable

@@ -35,10 +35,16 @@ repository an agent left in a submodule path or nested below the checkout), so a
   Every other `OPENCODE_`, `SRE_` and `AWS_` name is still refused.
 
 ### Changed
-- `fix-runner`: `extra_environment` also refuses `SRE_MODEL_FALLBACK` and `SRE_MODEL_FALLBACK_KEY`,
-  which the module sets itself. A configuration that carried either name there (the key as plain
-  task environment would have been readable in the task definition) now fails to plan: use
-  `model_fallback`.
+- `fix-runner`: the default `image` moves from the v2.5.0 runner to v2.7.0, so a plan that does not
+  set `image` replaces the task definition. Two behaviours of that runner reach every install,
+  with or without `model_fallback`: in a run of a model whose provider prefix the runner maps, the
+  agent holds only that model's provider key, so another key in `provider_key_secret_arns` (one a
+  build tool reads, say) no longer reaches the agent; and a repository the agent leaves in a
+  submodule path or under an ignored directory is removed when the run ends and named in the
+  report.
+- `fix-runner`: `extra_environment` also refuses `SRE_MODEL_FALLBACK`, which the module sets itself
+  (`SRE_MODEL_FALLBACK_KEY` was already refused there by the rule on credential names). A
+  configuration that carried it now fails to plan: use `model_fallback`.
 
 ## [4.13.2]
 

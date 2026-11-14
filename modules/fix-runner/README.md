@@ -134,6 +134,10 @@ too does the request fail, or move on to the take-over your repository's `platfo
 setting allows. The card, the Control Tower and the fix queue say which model did the work. Nothing
 of SRE Agent's ever reaches your machine: the second key is yours.
 
+The module compares the two secrets' ARNs, while the runner compares the keys themselves: two
+different secrets that hold the same key, used with the same model, pass the plan and the runner
+then refuses to start.
+
 ```hcl
 data "aws_secretsmanager_secret" "openai" { name = "sre-fix-runner-openai" }
 
@@ -475,7 +479,7 @@ cannot install system packages; and it has no AWS credentials unless you opt in.
   limits ports, not destinations, because the image pull, the log delivery, the poll, GitHub, the
   model provider and the package registries are hosts the module cannot name.
 - **What it holds.** The model provider key stays in the agent's environment (opencode calls the
-  model with it; with `model_fallback` each run holds only the key of the model it runs, never both), and so does a GitHub token, because your repositories are private and the agent
+  model with it; with the v2.7.0 runner the agent's run holds only the key of the model it runs, and with an `sre_model` prefix the runner does not map it keeps every key), and so does a GitHub token, because your repositories are private and the agent
   clones them as a CI job does. Without `agent_github_token_secret_arn` that token is the runner's
   own, which can push, and only the package's command fence on `git push` stands between the agent
   and a push to any repository that token reaches; the fence is a speed bump, because an

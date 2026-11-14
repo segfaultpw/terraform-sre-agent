@@ -310,7 +310,8 @@ variable "provider_key_secret_arns" {
     CEREBRAS_API_KEY, moonshotai MOONSHOT_API_KEY, deepinfra DEEPINFRA_API_KEY, huggingface HF_TOKEN,
     zai ZHIPU_API_KEY, minimax MINIMAX_API_KEY, nvidia NVIDIA_API_KEY, opencode OPENCODE_API_KEY,
     vercel AI_GATEWAY_API_KEY. For one of those providers the module refuses a map that lacks the
-    key sre_model needs. The agent holds this key too (opencode calls the model with it). The names
+    key sre_model needs. The agent's run holds only the key of the model it runs (v2.7.0 runner); with an sre_model prefix the
+    runner does not map it keeps every key. The names
     that start with OPENCODE_ are refused, except OPENCODE_API_KEY, which is the opencode provider's
     own key.
   EOT
