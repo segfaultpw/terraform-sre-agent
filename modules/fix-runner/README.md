@@ -89,8 +89,8 @@ The self-hosted fix runner is a plan feature (`self_hosted_fix_runner`).
    except when the secret's own name ends in a hyphen and six letters or digits (a secret called
    `sre-fix-runner-github`): the module cannot tell such a name from a real suffix, so copy the ARN
    from `create-secret` or `describe-secret`, never build it from the name.
-3. Apply the module. The image defaults to the `sre-agent-opencode` v2.5.0 runner pinned by its
-   multi-architecture digest (`ghcr.io/segfaultpw/sre-agent-opencode-runner@sha256:6106650ffc929020021df7a50365826ec615652ba8fada26d4bf5695ab0143fd`), and `image` replaces it with another digest; a tag is
+3. Apply the module. The image defaults to the `sre-agent-opencode` v2.7.0 runner pinned by its
+   multi-architecture digest (`ghcr.io/segfaultpw/sre-agent-opencode-runner@sha256:a66462ff1d33acf136e5c9bbb7f2e8ca5f5cc43391b4d842a972969c9119eab7`), and `image` replaces it with another digest; a tag is
    refused. Two keys of the image matter: one older than v1.7.0 knows no App authentication, and one older than v1.6.0 no leases and no workspace
    split, so a `runner_count` above one needs this default (or a newer digest), and one older
    than v1.5.0 ignores `SRE_MEMORY_BUCKET` and `SRE_MEMORY_PREFIX`, so the notes then stay on the
@@ -632,7 +632,7 @@ makes the runner assume that role for each request and give the agent its short-
 |---|---|---|
 | `sre_agent_url` | required | Your SRE Agent origin, an https URL with no path. Becomes `SRE_SERVER_URL`. |
 | `sre_model` | required | `provider/model`, for example `openrouter/deepseek/deepseek-v4-pro`. Becomes `SRE_MODEL`. |
-| `image` | the v1.6.0 runner, by digest | The runner image pinned by digest. A tag is refused; null keeps the default. |
+| `image` | the v2.7.0 runner, by digest | The runner image pinned by digest. A tag is refused; null keeps the default. |
 | `api_key_secret_arn` | required | Full ARN of the secret holding the `fix_runner:poll` API key. Becomes `SRE_API_KEY`. |
 | `github_app_id` | `null` | The numeric id of a GitHub App. With `github_app_private_key_secret_arn` it selects App mode: the task definition sets `SRE_GITHUB_APP_ID` plain and the runner mints short-lived installation tokens per request. Needs the runner image v1.7.0 or newer. |
 | `github_app_private_key_secret_arn` | `null` | Full ARN of the secret holding the App's private key PEM (the `.pem` file as downloaded). Becomes `SRE_GITHUB_APP_PRIVATE_KEY`. |

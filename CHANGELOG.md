@@ -11,12 +11,15 @@ than a `terraform apply`.
 ## [4.14.0]
 
 The `fix-runner` module can give the runner a second model and key. A plan that does not set
-`model_fallback` is unchanged: same service, same task definition, same task role.
+`model_fallback` or `image` changes one thing: the task definition's image, which moves to the
+v2.7.0 runner.
 
-The new variable needs the `sre-agent-opencode` **v2.7.0** runner image or newer. An older image
-ignores `SRE_MODEL_FALLBACK` and `SRE_MODEL_FALLBACK_KEY`. This version of the module still defaults
-to the v2.5.0 image; the default moves to v2.7.0 once that image is published, so set `image` to the
-v2.7.0 digest to use the second model today.
+The default `image` is now the `sre-agent-opencode` **v2.7.0** runner
+(`ghcr.io/segfaultpw/sre-agent-opencode-runner@sha256:a66462ff1d33acf136e5c9bbb7f2e8ca5f5cc43391b4d842a972969c9119eab7`),
+which the new variable needs: an older image ignores `SRE_MODEL_FALLBACK` and
+`SRE_MODEL_FALLBACK_KEY`. v2.7.0 also carries a security fix (the runner never runs git inside a
+repository an agent left in a submodule path or nested below the checkout), so a plan that pins
+`image` to an older digest should move it.
 
 ### Added
 - `fix-runner`: `model_fallback = { model, key_secret_arn }` (default null). The model becomes
