@@ -41,11 +41,10 @@ role"**.
 
 The ARNs in this repository are samples. The principal grants nothing on its
 own, because every request must also carry your ExternalId, which is the whole
-point of the condition. So treat the ExternalId as private to your organization:
-it is not a password, but whoever holds it and your role ARN is one step from
-being able to ask the platform to act in your account. The modules write it only
-into the role's trust policy, never into a role description or a tag; keep it
-out of your own descriptions, tags and tickets too.
+point of the condition. The ExternalId identifies your organization to the
+role's trust policy: it is not a credential and it never changes. The modules
+write it only into the trust policy, never into a role description or a tag,
+which simply stops it being broadcast to everyone who can list roles.
 
 ```hcl
 module "sre_agent_readonly" {
