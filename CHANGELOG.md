@@ -8,6 +8,43 @@ than a `terraform apply`.
 - **minor**: a permission added, because the product gained a feature needing it
 - **patch**: documentation, validation, formatting; no change to what is granted
 
+## [4.15.0]
+
+The `aws-readonly` module gains two optional inputs and the four AWS role modules stop writing your
+ExternalId into the role's description. **A plan that sets neither new input shows one in-place
+change per role (`~ description`) and nothing else.** The policy a default plan renders is
+byte for byte the one 4.14.1 rendered.
+
+### Changed
+- `aws-readonly`, `aws-cleanup`, `aws-iam-hygiene`, `aws-ssm-remediation`: **the ExternalId is no
+  longer written into the role's `description`.** A description is readable by anyone who can call
+  `iam:GetRole` or `iam:ListRoles` and appears in CloudTrail, AWS Config snapshots and inventory
+  tools; the trust policy's `sts:ExternalId` condition already holds the value where it must be,
+  and it is the only place the modules now write it. The new descriptions say what the role is for
+  and that the SRE Agent platform assumes it. Upgrading shows **one in-place update per role**
+  (`aws_iam_role.description` updates through `UpdateRoleDescription`; the role is not replaced,
+  its ARN, sessions and permissions are untouched). The old description stays in your CloudTrail
+  and Terraform state history; if you consider the ExternalId exposed, ask SRE Agent to rotate it.
+  `external_id` stays a plain, non-sensitive variable: Terraform still prints a trust policy in a
+  plan whatever the mark, so it would only suggest protection it does not give.
+
+### Added
+- `aws-readonly`: `log_group_arns` (default null, every log group, today's behaviour). When set,
+  the CloudWatch Logs reads (`FilterLogEvents`, `StartQuery`, `GetLogEvents` and the
+  `Describe*`/`Get*`/`List*` calls) apply only to those log groups and their streams, so a customer
+  can keep a sensitive group unreadable without writing a separate Deny. IAM cannot scope five Logs
+  actions (`DescribeLogGroups`, `ListLogGroups`, `DescribeQueries`, `DescribeQueryDefinitions`,
+  `StopQuery`), which stay account-wide in a `LogsAccountWide` statement: the names of other groups
+  stay visible, their contents do not. **Setting it narrows access** (the `Observability` statement
+  loses its `logs:` actions; they return in `LogsScoped` and `LogsAccountWide`), so a log search
+  on a group you did not list reports no data. An empty list and a value that is not a log group ARN
+  are refused at plan time. No effect while `enable_observability` is false.
+- `aws-readonly`: `enable_prometheus` (default false) grants `aps:QueryMetrics`, `aps:GetLabels`,
+  `aps:GetSeries` and `aps:GetMetricMetadata` for Amazon Managed Prometheus, on every workspace
+  unless `prometheus_workspace_arns` (default null, `*`) lists workspace ARNs. **A permission added,
+  and only when you turn it on**, which is why this is a minor version. Read-only: there is no write
+  action in the group.
+
 ## [4.14.1]
 
 The default `image` of the `fix-runner` module is now the `sre-agent-opencode` **v2.7.1** runner
