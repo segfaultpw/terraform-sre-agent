@@ -36,6 +36,18 @@ override_resource {
   values = {}
 }
 
+override_resource {
+  target = aws_iam_policy.logs_scoped
+  values = {
+    arn = "arn:aws:iam::123456789012:policy/sre-agent-readonly-logs"
+  }
+}
+
+override_resource {
+  target = aws_iam_role_policy_attachment.logs_scoped
+  values = {}
+}
+
 variables {
   external_id           = "0123456789abcdef0123"
   trusted_principal_arn = "arn:aws:iam::111122223333:role/sre-agent-platform"
@@ -159,7 +171,8 @@ run "role_description_holds_no_external_id" {
 }
 
 # --- log_group_arns ---------------------------------------------------------------------------
-# Unset, the policy is exactly what it was: the Logs actions sit in the Observability statement on "*".
+# Unset, nothing changes: the Logs actions sit in the Observability statement on "*" and the second
+# policy and its attachment do not exist.
 run "logs_are_account_wide_by_default" {
   command = apply
 
@@ -178,9 +191,14 @@ run "logs_are_account_wide_by_default" {
     ]) == 0
     error_message = "unset log_group_arns and enable_prometheus must render none of the new statements"
   }
+
+  assert {
+    condition     = length(aws_iam_policy.logs_scoped) == 0 && length(aws_iam_role_policy_attachment.logs_scoped) == 0 && output.logs_policy_arn == null
+    error_message = "unset log_group_arns must create no second policy"
+  }
 }
 
-run "log_group_arns_scope_the_log_reads" {
+run "log_group_arns_scope_the_log_reads_in_a_second_policy" {
   command = apply
 
   variables {
@@ -190,18 +208,18 @@ run "log_group_arns_scope_the_log_reads" {
     ]
   }
 
-  # No statement but LogsAccountWide may name a logs: action on "*", and the Observability statement has none.
+  # The main policy holds no logs: action at all.
   assert {
     condition = length([
       for s in jsondecode(data.aws_iam_policy_document.readonly.json).Statement :
-      s if s.Sid != "LogsAccountWide" && flatten([s.Resource]) == ["*"] && length([for a in flatten([s.Action]) : a if startswith(a, "logs:")]) > 0
+      s if length([for a in flatten([s.Action]) : a if startswith(a, "logs:")]) > 0
     ]) == 0
-    error_message = "a logs: action is still granted on * outside the five that IAM cannot scope"
+    error_message = "the main policy still grants a logs: action while log_group_arns is set"
   }
 
   assert {
     condition = jsonencode([
-      for s in jsondecode(data.aws_iam_policy_document.readonly.json).Statement :
+      for s in jsondecode(data.aws_iam_policy_document.logs_scoped[0].json).Statement :
       sort(flatten([s.Resource]))
       if s.Sid == "LogsScoped"
       ]) == jsonencode([[
@@ -215,12 +233,26 @@ run "log_group_arns_scope_the_log_reads" {
 
   assert {
     condition = toset(flatten([
-      for s in jsondecode(data.aws_iam_policy_document.readonly.json).Statement : s.Action if s.Sid == "LogsAccountWide"
-    ])) == toset(["logs:DescribeLogGroups", "logs:ListLogGroups", "logs:DescribeQueries", "logs:DescribeQueryDefinitions", "logs:StopQuery"])
-    error_message = "LogsAccountWide must hold exactly the five actions IAM cannot scope"
+      for s in jsondecode(data.aws_iam_policy_document.logs_scoped[0].json).Statement : s.Action if s.Sid == "LogsAccountWide"
+    ])) == toset(["logs:DescribeLogGroups", "logs:StopQuery"])
+    error_message = "LogsAccountWide must hold exactly the two actions the product calls that take no resource"
   }
 
-  # Everything else the group granted is untouched.
+  # The seven Logs actions the product calls are all granted, scoped or not.
+  assert {
+    condition = alltrue([
+      for need in ["logs:FilterLogEvents", "logs:StartQuery", "logs:Get*", "logs:Describe*"] :
+      contains(flatten([for s in jsondecode(data.aws_iam_policy_document.logs_scoped[0].json).Statement : s.Action if s.Sid == "LogsScoped"]), need)
+    ])
+    error_message = "LogsScoped lost an action the product calls (GetQueryResults, GetLogEvents and GetLogGroupFields ride on Get*)"
+  }
+
+  assert {
+    condition     = length(aws_iam_policy.logs_scoped) == 1 && length(aws_iam_role_policy_attachment.logs_scoped) == 1 && output.logs_policy_arn == "arn:aws:iam::123456789012:policy/sre-agent-readonly-logs"
+    error_message = "log_group_arns must create and attach the second policy and output its ARN"
+  }
+
+  # Everything else the observability group granted is untouched.
   assert {
     condition = length([
       for s in jsondecode(data.aws_iam_policy_document.readonly.json).Statement :
@@ -242,9 +274,35 @@ run "log_group_arns_do_nothing_when_observability_is_off" {
     condition = length([
       for s in jsondecode(data.aws_iam_policy_document.readonly.json).Statement :
       s if length([for a in flatten([s.Action]) : a if startswith(a, "logs:")]) > 0
-    ]) == 0
-    error_message = "with enable_observability false no logs: action may be granted"
+    ]) == 0 && length(aws_iam_policy.logs_scoped) == 0
+    error_message = "with enable_observability false no logs: action may be granted and no second policy created"
   }
+}
+
+# The second policy is refused by AWS above 6,144 characters without whitespace. The validation's own
+# arithmetic (294 fixed + 2 * length + 8 per ARN <= 6,144) is pinned against the policy AWS would see:
+# ten ARNs of 288 or 289 characters (five and five) are exactly 6,144 characters, one character more is refused.
+run "the_second_policy_at_the_size_limit_is_accepted_and_fits" {
+  command = apply
+
+  variables {
+    log_group_arns = [for i in range(10) : "arn:aws:logs:us-east-1:123456789012:log-group:${join("", [for k in range(i < 5 ? 241 : 242) : "x"])}${i}"]
+  }
+
+  assert {
+    condition     = length(data.aws_iam_policy_document.logs_scoped[0].minified_json) == 6144
+    error_message = "ten ARNs of 288 and 289 characters must render a 6,144 character policy, the limit AWS enforces"
+  }
+}
+
+run "one_character_over_the_size_limit_is_refused" {
+  command = plan
+
+  variables {
+    log_group_arns = [for i in range(10) : "arn:aws:logs:us-east-1:123456789012:log-group:${join("", [for k in range(i < 5 ? 241 : (i == 5 ? 243 : 242)) : "x"])}${i}"]
+  }
+
+  expect_failures = [var.log_group_arns]
 }
 
 run "an_empty_log_group_list_is_refused" {
@@ -279,8 +337,8 @@ run "prometheus_reads_every_workspace_when_enabled" {
     condition = jsonencode([
       for s in jsondecode(data.aws_iam_policy_document.readonly.json).Statement :
       [sort(flatten([s.Action])), flatten([s.Resource])] if s.Sid == "Prometheus"
-    ]) == jsonencode([[["aps:GetLabels", "aps:GetMetricMetadata", "aps:GetSeries", "aps:QueryMetrics"], ["*"]]])
-    error_message = "the Prometheus group must be the four read actions on *"
+    ]) == jsonencode([[["aps:GetLabels", "aps:GetMetricMetadata", "aps:GetSeries", "aps:ListRules", "aps:QueryMetrics"], ["*"]]])
+    error_message = "the Prometheus group must be the five read actions on *"
   }
 
   assert {

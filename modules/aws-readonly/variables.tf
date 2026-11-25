@@ -8,11 +8,12 @@ variable "external_id" {
     mismatch means every AssumeRole is denied. A shared or guessable value
     removes the confused-deputy protection this condition exists for.
 
-    The module writes this value only into the trust policy's condition. It is
-    kept out of the role's description and tags (a description is readable by
-    anyone who can call iam:GetRole or iam:ListRoles), and it is not marked
-    sensitive: Terraform would still print the trust policy in a plan, so the
-    mark would only suggest a protection it does not give.
+    It identifies your organization to the role's trust policy: it is not a
+    credential and it never changes. The module writes it only into the trust
+    policy's condition, so it is not broadcast to everyone who can call
+    iam:GetRole or iam:ListRoles through the role's description or tags. It is
+    not marked sensitive: Terraform would still print the trust policy in a
+    plan, so the mark would only suggest a protection it does not give.
   EOT
 
   validation {
@@ -47,6 +48,15 @@ variable "policy_name" {
   type        = string
   description = "Name of the customer-managed policy attached to the role."
   default     = "sre-agent-readonly"
+}
+
+variable "logs_policy_name" {
+  type        = string
+  description = <<-EOT
+    Name of the second customer-managed policy that holds the CloudWatch Logs
+    reads when `log_group_arns` is set. Not created otherwise.
+  EOT
+  default     = "sre-agent-readonly-logs"
 }
 
 variable "max_session_duration" {
@@ -278,20 +288,33 @@ variable "log_group_arns" {
     account parts, so `arn:aws:logs:*:111122223333:log-group:/prod/*` covers every
     group under `/prod/` in every Region.
 
-    When set, `logs:FilterLogEvents`, `logs:StartQuery`, `logs:GetLogEvents`,
-    `logs:Describe*`, `logs:Get*` and `logs:List*` apply to those groups only
-    (an Insights query or a tail on any other group is denied). Five actions
-    cannot be scoped by IAM and stay account-wide: `logs:DescribeLogGroups`,
-    `logs:ListLogGroups`, `logs:DescribeQueries`, `logs:DescribeQueryDefinitions`
-    and `logs:StopQuery`. So the names of your other log groups remain visible
-    to SRE Agent; their contents are not. Has no effect when
-    `enable_observability` is false. An empty list is refused, because it would
-    read as "no logs" while meaning nothing different from null; use null, or
-    turn `enable_observability` off.
+    When set, the Logs reads move out of the main policy into a second policy
+    (`logs_policy_name`) that is created and attached only in this case.
+    `logs:FilterLogEvents`, `logs:StartQuery`, `logs:GetQueryResults`,
+    `logs:GetLogEvents`, `logs:GetLogGroupFields` and the other `Describe*`,
+    `Get*` and `List*` actions that take a log group apply to the listed groups
+    only. Two actions the product calls take no resource and stay account-wide:
+    `logs:DescribeLogGroups` (the names of your other log groups remain visible
+    to SRE Agent, their contents do not) and `logs:StopQuery`. Every other Logs
+    action that names no log group is not granted while this is set.
+
+    A request against a log group you did not list is denied (AccessDenied). A
+    Logs Insights query names its groups together, so a query that names even one
+    unlisted group is refused as a whole. The product's Verify button may show
+    the scoped Logs actions as not granted until it checks them against the
+    groups you listed.
+
+    The second policy holds at most 6,144 characters without whitespace, which
+    AWS enforces. Each entry costs twice its ARN length plus 8 characters (the
+    group and its streams), about 5,850 characters in all, which is about 28
+    ARNs of 100 characters. A longer list is refused at plan time: use name
+    wildcards (`log-group:/prod/*`) instead of listing every group. Has no effect
+    when `enable_observability` is false. An empty list is refused, because it
+    would read as "no logs" while meaning nothing different from null; use null,
+    or turn `enable_observability` off.
 
     Changing this from null to a list removes the account-wide Logs access from
-    the policy, so the product's log search reports no data for any group you
-    did not list.
+    the policy, so every search of a group you did not list is denied.
   EOT
   default     = null
 
@@ -306,14 +329,26 @@ variable "log_group_arns" {
     ])
     error_message = "Every log_group_arns entry must be a log group ARN such as arn:aws:logs:us-east-1:111122223333:log-group:/aws/lambda/checkout (IAM wildcards allowed, an optional trailing :* is fine)."
   }
+
+  # The second policy is 294 characters of fixed text plus, for each ARN, the group and its
+  # streams: 2 * length + 8. AWS refuses a managed policy above 6,144 characters.
+  validation {
+    condition = var.log_group_arns == null ? true : !alltrue([
+      for a in var.log_group_arns : can(regex("^arn:aws[a-z-]*:logs:[^:]+:[^:]+:log-group:[^:]+(:\\*)?$", a))
+      ]) ? true : sum(concat([0], [
+        for a in var.log_group_arns : 2 * length(regex("^arn:aws[a-z-]*:logs:[^:]+:[^:]+:log-group:[^:]+", a)) + 8
+    ])) <= 5850
+    error_message = "log_group_arns is too long for one IAM policy (6,144 characters without whitespace; each ARN costs twice its length plus 8, 5,850 in all). Use name wildcards such as arn:aws:logs:us-east-1:111122223333:log-group:/prod/* instead of listing every group."
+  }
 }
 
 variable "enable_prometheus" {
   type        = bool
   description = <<-EOT
     Amazon Managed Prometheus: `aps:QueryMetrics`, `aps:GetLabels`,
-    `aps:GetSeries` and `aps:GetMetricMetadata`, so SRE Agent can run PromQL
-    against your workspaces with this role instead of a separate credential.
+    `aps:GetSeries`, `aps:GetMetricMetadata` and `aps:ListRules`, so SRE Agent can
+    run PromQL against your workspaces and read their alerting rules with this
+    role instead of a separate credential.
 
     Read-only, and there is no write action in this group. Off by default,
     because most accounts have no workspace. By default it covers every

@@ -199,12 +199,12 @@ locals {
 
     # --- Observability -----------------------------------------------------
     # Metrics, logs, traces, and the change history an investigation correlates
-    # against. logs:StopQuery is write-shaped but only cancels a query this role
-    # started.
+    # against. logs:StopQuery is write-shaped: it takes no resource, so it can
+    # cancel any running query in the account, not only one this role started.
     #
     # With log_group_arns set, every logs: action leaves this statement (the list
-    # lives in local.observability_actions) and comes back in the two Logs
-    # statements below, scoped to those log groups.
+    # lives in local.observability_actions) and comes back in the separate Logs
+    # policy at the end of this file, scoped to those log groups.
     observability = {
       enabled = var.enable_observability
       actions = local.scope_logs ? [for a in local.observability_actions : a if !startswith(a, "logs:")] : local.observability_actions
@@ -322,7 +322,7 @@ locals {
     # Reads metrics from an AMP workspace: instant and range queries, label
     # names and values, series and metric metadata. No write action exists in
     # this group: nothing here can remote-write, delete a workspace or change
-    # its rules. Off by default because most accounts have no workspace. The
+    # its rules or alerts. Off by default because most accounts have no workspace. The
     # one group that can be scoped to chosen resources through its own
     # variable, prometheus_workspace_arns.
     prometheus = {
@@ -333,6 +333,9 @@ locals {
         "aps:GetLabels",
         "aps:GetSeries",
         "aps:GetMetricMetadata",
+        # GET /api/v1/rules, which SRE Agent's alert follow-up reads to learn what an
+        # alerting rule is doing now. AMP has no action for /api/v1/status/config.
+        "aps:ListRules",
       ]
     }
   }
@@ -381,48 +384,6 @@ data "aws_iam_policy_document" "readonly" {
       effect    = "Allow"
       actions   = group.value.actions
       resources = try(group.value.resources, ["*"])
-    }
-  }
-
-  # With log_group_arns set the Logs actions are granted here instead of in the
-  # Observability statement. Two statements because IAM cannot scope every Logs
-  # action to a log group: the ones below name no resource type at all
-  # (DescribeLogGroups, ListLogGroups, DescribeQueries, DescribeQueryDefinitions,
-  # StopQuery), so they stay on "*" and expose only group names, query ids and
-  # saved query definitions. Everything that reads events, fields, results or
-  # a group's configuration is limited to the listed groups. The action list is
-  # the wildcard set the group always had, minus those five.
-  dynamic "statement" {
-    for_each = local.scope_logs ? [1] : []
-
-    content {
-      sid    = "LogsScoped"
-      effect = "Allow"
-      actions = [
-        "logs:Describe*",
-        "logs:Get*",
-        "logs:List*",
-        "logs:FilterLogEvents",
-        "logs:StartQuery",
-      ]
-      resources = local.log_group_resources
-    }
-  }
-
-  dynamic "statement" {
-    for_each = local.scope_logs ? [1] : []
-
-    content {
-      sid    = "LogsAccountWide"
-      effect = "Allow"
-      actions = [
-        "logs:DescribeLogGroups",
-        "logs:ListLogGroups",
-        "logs:DescribeQueries",
-        "logs:DescribeQueryDefinitions",
-        "logs:StopQuery",
-      ]
-      resources = ["*"]
     }
   }
 
@@ -486,4 +447,63 @@ resource "aws_iam_policy" "this" {
 resource "aws_iam_role_policy_attachment" "this" {
   role       = aws_iam_role.this.name
   policy_arn = aws_iam_policy.this.arn
+}
+
+# --- CloudWatch Logs, scoped to log groups -----------------------------------
+# A second managed policy, created and attached only when log_group_arns is set, so
+# the main policy keeps its size (a managed policy holds at most 6,144 characters
+# without whitespace, and a long list of groups would not fit beside the other
+# groups) and a plan that leaves log_group_arns unset is byte for byte what it was.
+#
+# Two statements because IAM cannot scope every Logs action to a log group. The
+# product calls seven: FilterLogEvents, StartQuery, GetQueryResults, GetLogEvents and
+# GetLogGroupFields take a log group (or one of its streams) and are scoped here;
+# DescribeLogGroups and StopQuery name no resource at all, so they stay on "*". The
+# wildcards also give, on the listed groups only, the other group-scoped reads the
+# group has always had (DescribeLogStreams, GetLogRecord and so on). Every Logs
+# action that names no log group and is not one of those two (DescribeQueries,
+# DescribeQueryDefinitions, DescribeResourcePolicies, DescribeExportTasks and about
+# twenty more) is not granted at all while scoping is on.
+data "aws_iam_policy_document" "logs_scoped" {
+  count = local.scope_logs ? 1 : 0
+
+  statement {
+    sid    = "LogsScoped"
+    effect = "Allow"
+    actions = [
+      "logs:Describe*",
+      "logs:Get*",
+      "logs:List*",
+      "logs:FilterLogEvents",
+      "logs:StartQuery",
+    ]
+    resources = local.log_group_resources
+  }
+
+  statement {
+    sid    = "LogsAccountWide"
+    effect = "Allow"
+    actions = [
+      "logs:DescribeLogGroups",
+      "logs:StopQuery",
+    ]
+    resources = ["*"]
+  }
+}
+
+resource "aws_iam_policy" "logs_scoped" {
+  count = local.scope_logs ? 1 : 0
+
+  name        = var.logs_policy_name
+  description = "CloudWatch Logs read access SRE Agent uses, limited to the log groups you listed"
+  policy      = data.aws_iam_policy_document.logs_scoped[0].json
+
+  tags = var.tags
+}
+
+resource "aws_iam_role_policy_attachment" "logs_scoped" {
+  count = local.scope_logs ? 1 : 0
+
+  role       = aws_iam_role.this.name
+  policy_arn = aws_iam_policy.logs_scoped[0].arn
 }

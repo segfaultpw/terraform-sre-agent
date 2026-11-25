@@ -39,7 +39,7 @@ concluding there is nothing to report.
 | `enable_inventory` | `true` | SSM inventory, Secrets Manager metadata (never values), ECR and Step Functions: existence of things the other groups do not name. |
 | `enable_verification` | `true` | `iam:SimulatePrincipalPolicy`, scoped to this role's own ARN: the Verify button answers with evidence instead of "unverified". |
 | `enable_bedrock` | `false` | Only if you point SRE Agent's AI provider at Bedrock in *your* account. The one block that is not read-only: `InvokeModel` bills you directly. |
-| `enable_prometheus` | `false` | Amazon Managed Prometheus: `aps:QueryMetrics`, `aps:GetLabels`, `aps:GetSeries` and `aps:GetMetricMetadata`, so PromQL runs against your workspaces with this role. Read-only; every workspace unless `prometheus_workspace_arns` limits it. Off because most accounts have no workspace. |
+| `enable_prometheus` | `false` | Amazon Managed Prometheus: `aps:QueryMetrics`, `aps:GetLabels`, `aps:GetSeries`, `aps:GetMetricMetadata` and `aps:ListRules`, so PromQL runs against your workspaces, and their alerting rules are read, with this role. Read-only; every workspace unless `prometheus_workspace_arns` limits it. Off because most accounts have no workspace. |
 
 ### Limiting CloudWatch Logs to chosen log groups
 
@@ -59,23 +59,46 @@ module "sre_agent_readonly" {
 }
 ```
 
-Reading events, running Logs Insights queries, `GetLogEvents` and the
-`Describe*`/`Get*`/`List*` calls are then limited to those groups, and a query
-or tail on any other group is denied. IAM cannot scope five Logs actions to a
-group (`DescribeLogGroups`, `ListLogGroups`, `DescribeQueries`,
-`DescribeQueryDefinitions`, `StopQuery`), so they stay account-wide: SRE Agent
-can still see that your other log groups *exist*, but not what is in them. The
-policy then has two extra statements, `LogsScoped` and `LogsAccountWide`, and
-no `logs:` action in `Observability`. Leave `log_group_arns` unset to keep the
-account-wide behaviour exactly as before. The account-wide Logs access goes away
-when you set it, so the product's log search reports no data for any group you
-did not list.
+What changes when you set it:
+
+- The Logs reads leave the main policy and go into a **second managed policy**
+  (`logs_policy_name`, default `sre-agent-readonly-logs`), created and attached
+  only in this case, so a plan that leaves `log_group_arns` unset is exactly what
+  it was. The main policy keeps no `logs:` action.
+- The actions SRE Agent calls and where each one lives: `FilterLogEvents`,
+  `StartQuery`, `GetQueryResults`, `GetLogEvents` and `GetLogGroupFields` are
+  limited to the listed groups (and their streams); `DescribeLogGroups` and
+  `StopQuery` take no resource in IAM, so they stay on `*`. The other
+  `Describe*`, `Get*` and `List*` actions that take a log group
+  (`DescribeLogStreams`, `GetLogRecord` and so on) are granted on the listed groups
+  only. **Every Logs action that names no log group, apart from those two, is not
+  granted at all**, which covers about twenty-five reads (`DescribeQueries`,
+  `DescribeQueryDefinitions`, `DescribeResourcePolicies`, `DescribeExportTasks`
+  and others). A feature that starts using one of them later works on an unscoped
+  install and is denied on a scoped one until this module grants it.
+- SRE Agent can still see that your other log groups exist (`DescribeLogGroups`),
+  but not what is in them.
+- A request against a group you did not list is denied (`AccessDenied`). A Logs
+  Insights query names its groups together, so **a query that names even one
+  unlisted group is refused as a whole**, not answered for the listed ones.
+  Expect the data source to show a denial after an investigation that picked an
+  unlisted group.
+- The product's **Verify button may show the scoped Logs actions as not granted**.
+  It asks IAM to simulate each action against all resources, and an action allowed
+  only on particular log groups does not pass that check. Until the product checks
+  them against the groups you listed, read the "missing" Logs actions as expected
+  when you have set `log_group_arns`.
+- AWS caps a managed policy at 6,144 characters without whitespace. Each entry
+  costs twice its ARN length plus 8 (the group and its streams): about 28 ARNs of
+  100 characters. A longer list is refused at plan time with a message that says
+  so; use name wildcards (`log-group:/prod/*`) rather than listing every group.
+- `log_group_arns` has no effect when `enable_observability` is false.
 
 ### Amazon Managed Prometheus
 
 `enable_prometheus = true` grants `aps:QueryMetrics`, `aps:GetLabels`,
-`aps:GetSeries` and `aps:GetMetricMetadata` on every workspace the role can
-see; `prometheus_workspace_arns = ["arn:aws:aps:us-east-1:111122223333:workspace/ws-0123abcd"]`
+`aps:GetSeries`, `aps:GetMetricMetadata` and `aps:ListRules` (the alerting rules
+SRE Agent's alert follow-up reads) on every workspace the role can see; `prometheus_workspace_arns = ["arn:aws:aps:us-east-1:111122223333:workspace/ws-0123abcd"]`
 limits it to the ones you list. Nothing in the group can write, remote-write or
 delete.
 
@@ -99,17 +122,18 @@ knowingly rather than discover it later.
 ## Upgrading to 4.15
 
 The role's description no longer contains your ExternalId (it used to read
-`Read-only access for SRE Agent (<the ExternalId>)`). A role description is
-visible to anyone who can call `iam:GetRole` or `iam:ListRoles` and appears in
-CloudTrail and AWS Config, while the trust policy condition already holds the
-value where it must be. The same change applies to `aws-cleanup`,
-`aws-iam-hygiene` and `aws-ssm-remediation`.
+`Read-only access for SRE Agent (<the ExternalId>)`). The ExternalId identifies
+your organization to the role's trust policy; it is not a credential and it never
+changes. Keeping it out of the description simply stops it being broadcast to
+everyone who can call `iam:GetRole` or `iam:ListRoles` and into CloudTrail and
+AWS Config. The trust policy condition still holds it, and is the only place the
+modules write it. The same change applies to `aws-cleanup`, `aws-iam-hygiene`
+and `aws-ssm-remediation`.
 
 `terraform plan` shows **one in-place update per role** (`~ description`,
 `UpdateRoleDescription`): the role is not replaced, its ARN and sessions are
-untouched, and nothing it grants changes. The old value stays in your
-CloudTrail history and Terraform state history; if the ExternalId was ever
-exposed through a role description and that matters to you, ask SRE Agent to rotate it.
+untouched, and nothing it grants changes. The old description stays in your
+CloudTrail and Terraform state history.
 
 ## Inputs
 
@@ -119,6 +143,7 @@ exposed through a role description and that matters to you, ask SRE Agent to rot
 | `trusted_principal_arn` | `string` | | yes |
 | `role_name` | `string` | `"sre-agent-readonly"` | no |
 | `policy_name` | `string` | `"sre-agent-readonly"` | no |
+| `logs_policy_name` | `string` | `"sre-agent-readonly-logs"` | no |
 | `max_session_duration` | `number` | `3600` | no |
 | `permissions_boundary_arn` | `string` | `null` | no |
 | `tags` | `map(string)` | `{}` | no |
@@ -133,4 +158,5 @@ exposed through a role description and that matters to you, ask SRE Agent to rot
 | `role_arn` | Paste into the AWS data source in SRE Agent |
 | `role_name` | Name of the created role |
 | `policy_arn` | ARN of the attached policy |
+| `logs_policy_arn` | ARN of the second, log-scoped policy (null unless `log_group_arns` is set) |
 | `enabled_services` | What you granted, for confirmation |

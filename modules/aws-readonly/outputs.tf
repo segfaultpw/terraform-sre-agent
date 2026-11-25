@@ -17,3 +17,8 @@ output "enabled_services" {
   description = "Services this role can read, for confirming what you granted."
   value       = sort(keys(local.enabled_statements))
 }
+
+output "logs_policy_arn" {
+  description = "ARN of the second policy that holds the scoped CloudWatch Logs reads. Null unless log_group_arns is set."
+  value       = one(aws_iam_policy.logs_scoped[*].arn)
+}
