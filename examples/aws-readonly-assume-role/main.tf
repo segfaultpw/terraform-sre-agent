@@ -31,6 +31,14 @@ module "sre_agent_readonly" {
   # not have inspected; the feature that needs it then reports no data.
   enable_identity_read = true
 
+  # Optional. Limit what SRE Agent can read from CloudWatch Logs to the groups
+  # you list (unset: every log group in the account). See the module README.
+  # log_group_arns = ["arn:aws:logs:us-east-1:111122223333:log-group:/aws/lambda/checkout"]
+
+  # Optional. Read Amazon Managed Prometheus workspaces (off by default).
+  # enable_prometheus         = true
+  # prometheus_workspace_arns = ["arn:aws:aps:us-east-1:111122223333:workspace/ws-0123abcd"]
+
   tags = {
     ManagedBy = "terraform"
     Purpose   = "sre-agent"

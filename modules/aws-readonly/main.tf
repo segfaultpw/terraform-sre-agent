@@ -28,6 +28,36 @@
  */
 
 locals {
+  observability_actions = [
+    "cloudwatch:Describe*",
+    "cloudwatch:Get*",
+    "cloudwatch:List*",
+    "logs:Describe*",
+    "logs:Get*",
+    "logs:List*",
+    "logs:FilterLogEvents",
+    "logs:StartQuery",
+    "logs:StopQuery",
+    "xray:Get*",
+    "xray:BatchGet*",
+    "cloudtrail:LookupEvents",
+    "cloudtrail:Describe*",
+    "cloudtrail:Get*",
+    "health:Describe*",
+    "applicationinsights:Describe*",
+    "applicationinsights:List*",
+  ]
+
+  # Each log group ARN stands for the group itself and for its streams: the Logs
+  # actions that read events name the group (FilterLogEvents, StartQuery) or a
+  # stream of it (GetLogEvents), so both forms are granted. The name part cannot
+  # hold a colon, which is what lets the regex cut a trailing ":*" off cleanly.
+  log_group_bases     = var.log_group_arns == null ? [] : [for a in var.log_group_arns : regex("^arn:aws[a-z-]*:logs:[^:]+:[^:]+:log-group:[^:]+", a)]
+  log_group_resources = distinct(flatten([for b in local.log_group_bases : [b, "${b}:*"]]))
+  scope_logs          = var.enable_observability && length(local.log_group_resources) > 0
+
+  prometheus_resources = var.prometheus_workspace_arns == null ? ["*"] : var.prometheus_workspace_arns
+
   # Grouped rather than one toggle per service: at this breadth a per-service
   # list is unreviewable, and the groups match how people actually reason about
   # what they are willing to expose.
@@ -171,27 +201,13 @@ locals {
     # Metrics, logs, traces, and the change history an investigation correlates
     # against. logs:StopQuery is write-shaped but only cancels a query this role
     # started.
+    #
+    # With log_group_arns set, every logs: action leaves this statement (the list
+    # lives in local.observability_actions) and comes back in the two Logs
+    # statements below, scoped to those log groups.
     observability = {
       enabled = var.enable_observability
-      actions = [
-        "cloudwatch:Describe*",
-        "cloudwatch:Get*",
-        "cloudwatch:List*",
-        "logs:Describe*",
-        "logs:Get*",
-        "logs:List*",
-        "logs:FilterLogEvents",
-        "logs:StartQuery",
-        "logs:StopQuery",
-        "xray:Get*",
-        "xray:BatchGet*",
-        "cloudtrail:LookupEvents",
-        "cloudtrail:Describe*",
-        "cloudtrail:Get*",
-        "health:Describe*",
-        "applicationinsights:Describe*",
-        "applicationinsights:List*",
-      ]
+      actions = local.scope_logs ? [for a in local.observability_actions : a if !startswith(a, "logs:")] : local.observability_actions
     }
 
     # --- Cost --------------------------------------------------------------
@@ -301,6 +317,24 @@ locals {
         "bedrock:InvokeModelWithResponseStream",
       ]
     }
+
+    # --- Amazon Managed Prometheus -----------------------------------------
+    # Reads metrics from an AMP workspace: instant and range queries, label
+    # names and values, series and metric metadata. No write action exists in
+    # this group: nothing here can remote-write, delete a workspace or change
+    # its rules. Off by default because most accounts have no workspace. The
+    # one group that can be scoped to chosen resources through its own
+    # variable, prometheus_workspace_arns.
+    prometheus = {
+      enabled   = var.enable_prometheus
+      resources = local.prometheus_resources
+      actions = [
+        "aps:QueryMetrics",
+        "aps:GetLabels",
+        "aps:GetSeries",
+        "aps:GetMetricMetadata",
+      ]
+    }
   }
 
   enabled_statements = { for name, s in local.statements : name => s if s.enabled }
@@ -346,6 +380,48 @@ data "aws_iam_policy_document" "readonly" {
       sid       = title(group.key)
       effect    = "Allow"
       actions   = group.value.actions
+      resources = try(group.value.resources, ["*"])
+    }
+  }
+
+  # With log_group_arns set the Logs actions are granted here instead of in the
+  # Observability statement. Two statements because IAM cannot scope every Logs
+  # action to a log group: the ones below name no resource type at all
+  # (DescribeLogGroups, ListLogGroups, DescribeQueries, DescribeQueryDefinitions,
+  # StopQuery), so they stay on "*" and expose only group names, query ids and
+  # saved query definitions. Everything that reads events, fields, results or
+  # a group's configuration is limited to the listed groups. The action list is
+  # the wildcard set the group always had, minus those five.
+  dynamic "statement" {
+    for_each = local.scope_logs ? [1] : []
+
+    content {
+      sid    = "LogsScoped"
+      effect = "Allow"
+      actions = [
+        "logs:Describe*",
+        "logs:Get*",
+        "logs:List*",
+        "logs:FilterLogEvents",
+        "logs:StartQuery",
+      ]
+      resources = local.log_group_resources
+    }
+  }
+
+  dynamic "statement" {
+    for_each = local.scope_logs ? [1] : []
+
+    content {
+      sid    = "LogsAccountWide"
+      effect = "Allow"
+      actions = [
+        "logs:DescribeLogGroups",
+        "logs:ListLogGroups",
+        "logs:DescribeQueries",
+        "logs:DescribeQueryDefinitions",
+        "logs:StopQuery",
+      ]
       resources = ["*"]
     }
   }

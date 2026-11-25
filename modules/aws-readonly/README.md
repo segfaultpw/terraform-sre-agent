@@ -39,6 +39,45 @@ concluding there is nothing to report.
 | `enable_inventory` | `true` | SSM inventory, Secrets Manager metadata (never values), ECR and Step Functions: existence of things the other groups do not name. |
 | `enable_verification` | `true` | `iam:SimulatePrincipalPolicy`, scoped to this role's own ARN: the Verify button answers with evidence instead of "unverified". |
 | `enable_bedrock` | `false` | Only if you point SRE Agent's AI provider at Bedrock in *your* account. The one block that is not read-only: `InvokeModel` bills you directly. |
+| `enable_prometheus` | `false` | Amazon Managed Prometheus: `aps:QueryMetrics`, `aps:GetLabels`, `aps:GetSeries` and `aps:GetMetricMetadata`, so PromQL runs against your workspaces with this role. Read-only; every workspace unless `prometheus_workspace_arns` limits it. Off because most accounts have no workspace. |
+
+### Limiting CloudWatch Logs to chosen log groups
+
+By default `enable_observability` lets SRE Agent read every log group in the
+account, which is what makes "search my logs" work without configuration. If a
+group holds something it should never read (audit trails, payment payloads),
+list the groups it may read instead:
+
+```hcl
+module "sre_agent_readonly" {
+  source = "github.com/segfaultpw/terraform-sre-agent//modules/aws-readonly?ref=v4.15.0"
+  # ...
+  log_group_arns = [
+    "arn:aws:logs:us-east-1:111122223333:log-group:/aws/lambda/checkout",
+    "arn:aws:logs:*:111122223333:log-group:/prod/*", # IAM wildcards work
+  ]
+}
+```
+
+Reading events, running Logs Insights queries, `GetLogEvents` and the
+`Describe*`/`Get*`/`List*` calls are then limited to those groups, and a query
+or tail on any other group is denied. IAM cannot scope five Logs actions to a
+group (`DescribeLogGroups`, `ListLogGroups`, `DescribeQueries`,
+`DescribeQueryDefinitions`, `StopQuery`), so they stay account-wide: SRE Agent
+can still see that your other log groups *exist*, but not what is in them. The
+policy then has two extra statements, `LogsScoped` and `LogsAccountWide`, and
+no `logs:` action in `Observability`. Leave `log_group_arns` unset to keep the
+account-wide behaviour exactly as before. The account-wide Logs access goes away
+when you set it, so the product's log search reports no data for any group you
+did not list.
+
+### Amazon Managed Prometheus
+
+`enable_prometheus = true` grants `aps:QueryMetrics`, `aps:GetLabels`,
+`aps:GetSeries` and `aps:GetMetricMetadata` on every workspace the role can
+see; `prometheus_workspace_arns = ["arn:aws:aps:us-east-1:111122223333:workspace/ws-0123abcd"]`
+limits it to the ones you list. Nothing in the group can write, remote-write or
+delete.
 
 ### EKS clusters and their workloads
 
@@ -57,6 +96,21 @@ data. If your bootstrap scripts embed secrets, that is worth knowing before you
 apply. The fix is to stop embedding them, but you should make that call
 knowingly rather than discover it later.
 
+## Upgrading to 4.15
+
+The role's description no longer contains your ExternalId (it used to read
+`Read-only access for SRE Agent (<the ExternalId>)`). A role description is
+visible to anyone who can call `iam:GetRole` or `iam:ListRoles` and appears in
+CloudTrail and AWS Config, while the trust policy condition already holds the
+value where it must be. The same change applies to `aws-cleanup`,
+`aws-iam-hygiene` and `aws-ssm-remediation`.
+
+`terraform plan` shows **one in-place update per role** (`~ description`,
+`UpdateRoleDescription`): the role is not replaced, its ARN and sessions are
+untouched, and nothing it grants changes. The old value stays in your
+CloudTrail history and Terraform state history; if the ExternalId was ever
+exposed through a role description and that matters to you, ask SRE Agent to rotate it.
+
 ## Inputs
 
 | Name | Type | Default | Required |
@@ -68,6 +122,8 @@ knowingly rather than discover it later.
 | `max_session_duration` | `number` | `3600` | no |
 | `permissions_boundary_arn` | `string` | `null` | no |
 | `tags` | `map(string)` | `{}` | no |
+| `log_group_arns` | `list(string)` | `null` (every log group) | no |
+| `prometheus_workspace_arns` | `list(string)` | `null` (every workspace) | no |
 | `enable_*` | `bool` | see table above | no |
 
 ## Outputs

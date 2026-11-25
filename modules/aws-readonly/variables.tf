@@ -175,6 +175,10 @@ variable "enable_observability" {
 
     Without CloudWatch nothing is ever "idle" or "oversized", because there is
     no utilization to judge it by.
+
+    The Logs actions here apply to every log group in the account. To limit
+    them to chosen groups (and so keep a sensitive one unreadable), set
+    `log_group_arns`.
   EOT
   default     = true
 }
@@ -258,4 +262,85 @@ variable "enable_bedrock" {
     instead.
   EOT
   default     = false
+}
+
+variable "log_group_arns" {
+  type        = list(string)
+  description = <<-EOT
+    Limits what SRE Agent can read from CloudWatch Logs to these log groups.
+    Null (the default) keeps today's behaviour: the Logs read actions apply to
+    every log group in the account.
+
+    Each entry is a log group ARN, for example
+    `arn:aws:logs:us-east-1:111122223333:log-group:/aws/lambda/checkout`. A
+    trailing `:*` is accepted and ignored, and the group's streams are covered
+    automatically. IAM wildcards work inside the name and in the Region and
+    account parts, so `arn:aws:logs:*:111122223333:log-group:/prod/*` covers every
+    group under `/prod/` in every Region.
+
+    When set, `logs:FilterLogEvents`, `logs:StartQuery`, `logs:GetLogEvents`,
+    `logs:Describe*`, `logs:Get*` and `logs:List*` apply to those groups only
+    (an Insights query or a tail on any other group is denied). Five actions
+    cannot be scoped by IAM and stay account-wide: `logs:DescribeLogGroups`,
+    `logs:ListLogGroups`, `logs:DescribeQueries`, `logs:DescribeQueryDefinitions`
+    and `logs:StopQuery`. So the names of your other log groups remain visible
+    to SRE Agent; their contents are not. Has no effect when
+    `enable_observability` is false. An empty list is refused, because it would
+    read as "no logs" while meaning nothing different from null; use null, or
+    turn `enable_observability` off.
+
+    Changing this from null to a list removes the account-wide Logs access from
+    the policy, so the product's log search reports no data for any group you
+    did not list.
+  EOT
+  default     = null
+
+  validation {
+    condition     = var.log_group_arns == null ? true : length(var.log_group_arns) > 0
+    error_message = "log_group_arns must be null (every log group) or a non-empty list of log group ARNs."
+  }
+
+  validation {
+    condition = var.log_group_arns == null ? true : alltrue([
+      for a in var.log_group_arns : can(regex("^arn:aws[a-z-]*:logs:[^:]+:[^:]+:log-group:[^:]+(:\\*)?$", a))
+    ])
+    error_message = "Every log_group_arns entry must be a log group ARN such as arn:aws:logs:us-east-1:111122223333:log-group:/aws/lambda/checkout (IAM wildcards allowed, an optional trailing :* is fine)."
+  }
+}
+
+variable "enable_prometheus" {
+  type        = bool
+  description = <<-EOT
+    Amazon Managed Prometheus: `aps:QueryMetrics`, `aps:GetLabels`,
+    `aps:GetSeries` and `aps:GetMetricMetadata`, so SRE Agent can run PromQL
+    against your workspaces with this role instead of a separate credential.
+
+    Read-only, and there is no write action in this group. Off by default,
+    because most accounts have no workspace. By default it covers every
+    workspace the role can see; set `prometheus_workspace_arns` to limit it.
+  EOT
+  default     = false
+}
+
+variable "prometheus_workspace_arns" {
+  type        = list(string)
+  description = <<-EOT
+    Limits the Prometheus group to these workspaces. Null (the default) means
+    every workspace (`*`). Each entry is a workspace ARN, for example
+    `arn:aws:aps:us-east-1:111122223333:workspace/ws-0123abcd`, or `*`.
+    Only used when `enable_prometheus` is true.
+  EOT
+  default     = null
+
+  validation {
+    condition     = var.prometheus_workspace_arns == null ? true : length(var.prometheus_workspace_arns) > 0
+    error_message = "prometheus_workspace_arns must be null (every workspace) or a non-empty list."
+  }
+
+  validation {
+    condition = var.prometheus_workspace_arns == null ? true : alltrue([
+      for a in var.prometheus_workspace_arns : a == "*" || can(regex("^arn:aws[a-z-]*:aps:[^:]+:[^:]+:workspace/[^:]+$", a))
+    ])
+    error_message = "Every prometheus_workspace_arns entry must be \"*\" or a workspace ARN such as arn:aws:aps:us-east-1:111122223333:workspace/ws-0123abcd."
+  }
 }

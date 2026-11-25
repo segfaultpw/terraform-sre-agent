@@ -157,3 +157,178 @@ run "role_description_holds_no_external_id" {
     error_message = "the trust policy lost its sts:ExternalId condition"
   }
 }
+
+# --- log_group_arns ---------------------------------------------------------------------------
+# Unset, the policy is exactly what it was: the Logs actions sit in the Observability statement on "*".
+run "logs_are_account_wide_by_default" {
+  command = apply
+
+  assert {
+    condition = length([
+      for s in jsondecode(data.aws_iam_policy_document.readonly.json).Statement :
+      s if s.Sid == "Observability" && contains(flatten([s.Action]), "logs:StartQuery") && contains(flatten([s.Action]), "logs:Describe*") && flatten([s.Resource]) == ["*"]
+    ]) == 1
+    error_message = "unset log_group_arns must keep the Logs actions in the Observability statement on *"
+  }
+
+  assert {
+    condition = length([
+      for s in jsondecode(data.aws_iam_policy_document.readonly.json).Statement :
+      s if contains(["LogsScoped", "LogsAccountWide", "Prometheus"], s.Sid)
+    ]) == 0
+    error_message = "unset log_group_arns and enable_prometheus must render none of the new statements"
+  }
+}
+
+run "log_group_arns_scope_the_log_reads" {
+  command = apply
+
+  variables {
+    log_group_arns = [
+      "arn:aws:logs:us-east-1:123456789012:log-group:/aws/lambda/checkout",
+      "arn:aws:logs:us-east-1:123456789012:log-group:/prod/*:*",
+    ]
+  }
+
+  # No statement but LogsAccountWide may name a logs: action on "*", and the Observability statement has none.
+  assert {
+    condition = length([
+      for s in jsondecode(data.aws_iam_policy_document.readonly.json).Statement :
+      s if s.Sid != "LogsAccountWide" && flatten([s.Resource]) == ["*"] && length([for a in flatten([s.Action]) : a if startswith(a, "logs:")]) > 0
+    ]) == 0
+    error_message = "a logs: action is still granted on * outside the five that IAM cannot scope"
+  }
+
+  assert {
+    condition = jsonencode([
+      for s in jsondecode(data.aws_iam_policy_document.readonly.json).Statement :
+      sort(flatten([s.Resource]))
+      if s.Sid == "LogsScoped"
+      ]) == jsonencode([[
+        "arn:aws:logs:us-east-1:123456789012:log-group:/aws/lambda/checkout",
+        "arn:aws:logs:us-east-1:123456789012:log-group:/aws/lambda/checkout:*",
+        "arn:aws:logs:us-east-1:123456789012:log-group:/prod/*",
+        "arn:aws:logs:us-east-1:123456789012:log-group:/prod/*:*",
+    ]])
+    error_message = "LogsScoped must name each group and its streams, once, with a trailing :* folded away"
+  }
+
+  assert {
+    condition = toset(flatten([
+      for s in jsondecode(data.aws_iam_policy_document.readonly.json).Statement : s.Action if s.Sid == "LogsAccountWide"
+    ])) == toset(["logs:DescribeLogGroups", "logs:ListLogGroups", "logs:DescribeQueries", "logs:DescribeQueryDefinitions", "logs:StopQuery"])
+    error_message = "LogsAccountWide must hold exactly the five actions IAM cannot scope"
+  }
+
+  # Everything else the group granted is untouched.
+  assert {
+    condition = length([
+      for s in jsondecode(data.aws_iam_policy_document.readonly.json).Statement :
+      s if s.Sid == "Observability" && contains(flatten([s.Action]), "cloudwatch:Get*") && contains(flatten([s.Action]), "xray:Get*") && contains(flatten([s.Action]), "cloudtrail:LookupEvents")
+    ]) == 1
+    error_message = "scoping the logs must not touch the other observability actions"
+  }
+}
+
+run "log_group_arns_do_nothing_when_observability_is_off" {
+  command = apply
+
+  variables {
+    enable_observability = false
+    log_group_arns       = ["arn:aws:logs:us-east-1:123456789012:log-group:/aws/lambda/checkout"]
+  }
+
+  assert {
+    condition = length([
+      for s in jsondecode(data.aws_iam_policy_document.readonly.json).Statement :
+      s if length([for a in flatten([s.Action]) : a if startswith(a, "logs:")]) > 0
+    ]) == 0
+    error_message = "with enable_observability false no logs: action may be granted"
+  }
+}
+
+run "an_empty_log_group_list_is_refused" {
+  command = plan
+
+  variables {
+    log_group_arns = []
+  }
+
+  expect_failures = [var.log_group_arns]
+}
+
+run "a_log_group_name_that_is_not_an_arn_is_refused" {
+  command = plan
+
+  variables {
+    log_group_arns = ["/aws/lambda/checkout"]
+  }
+
+  expect_failures = [var.log_group_arns]
+}
+
+# --- enable_prometheus ------------------------------------------------------------------------
+run "prometheus_reads_every_workspace_when_enabled" {
+  command = apply
+
+  variables {
+    enable_prometheus = true
+  }
+
+  assert {
+    condition = jsonencode([
+      for s in jsondecode(data.aws_iam_policy_document.readonly.json).Statement :
+      [sort(flatten([s.Action])), flatten([s.Resource])] if s.Sid == "Prometheus"
+    ]) == jsonencode([[["aps:GetLabels", "aps:GetMetricMetadata", "aps:GetSeries", "aps:QueryMetrics"], ["*"]]])
+    error_message = "the Prometheus group must be the four read actions on *"
+  }
+
+  assert {
+    condition     = contains(output.enabled_services, "prometheus")
+    error_message = "enabled_services must name the prometheus group"
+  }
+}
+
+run "prometheus_can_be_limited_to_workspaces" {
+  command = apply
+
+  variables {
+    enable_prometheus         = true
+    prometheus_workspace_arns = ["arn:aws:aps:us-east-1:123456789012:workspace/ws-0123abcd"]
+  }
+
+  assert {
+    condition = jsonencode([
+      for s in jsondecode(data.aws_iam_policy_document.readonly.json).Statement :
+      flatten([s.Resource]) if s.Sid == "Prometheus"
+    ]) == jsonencode([["arn:aws:aps:us-east-1:123456789012:workspace/ws-0123abcd"]])
+    error_message = "the Prometheus group must be limited to the listed workspace"
+  }
+}
+
+run "a_workspace_arn_that_is_not_one_is_refused" {
+  command = plan
+
+  variables {
+    enable_prometheus         = true
+    prometheus_workspace_arns = ["ws-0123abcd"]
+  }
+
+  expect_failures = [var.prometheus_workspace_arns]
+}
+
+run "prometheus_workspace_arns_alone_grant_nothing" {
+  command = apply
+
+  variables {
+    prometheus_workspace_arns = ["arn:aws:aps:us-east-1:123456789012:workspace/ws-0123abcd"]
+  }
+
+  assert {
+    condition = length([
+      for s in jsondecode(data.aws_iam_policy_document.readonly.json).Statement :
+      s if length([for a in flatten([s.Action]) : a if startswith(a, "aps:")]) > 0
+    ]) == 0
+    error_message = "without enable_prometheus no aps: action may be granted"
+  }
+}
