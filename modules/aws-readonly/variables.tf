@@ -7,6 +7,12 @@ variable "external_id" {
     Do not invent your own: the platform sends the value it generated, and a
     mismatch means every AssumeRole is denied. A shared or guessable value
     removes the confused-deputy protection this condition exists for.
+
+    The module writes this value only into the trust policy's condition. It is
+    kept out of the role's description and tags (a description is readable by
+    anyone who can call iam:GetRole or iam:ListRoles), and it is not marked
+    sensitive: Terraform would still print the trust policy in a plan, so the
+    mark would only suggest a protection it does not give.
   EOT
 
   validation {

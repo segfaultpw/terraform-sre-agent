@@ -39,9 +39,13 @@ role"**.
 - **Principal to trust**: the identity that assumes your role. The same for
   every customer.
 
-Neither is a secret, and the ARNs in this repository are samples. The principal
-grants nothing on its own, because every request must also carry your ExternalId,
-which is the whole point of the condition.
+The ARNs in this repository are samples. The principal grants nothing on its
+own, because every request must also carry your ExternalId, which is the whole
+point of the condition. So treat the ExternalId as private to your organization:
+it is not a password, but whoever holds it and your role ARN is one step from
+being able to ask the platform to act in your account. The modules write it only
+into the role's trust policy, never into a role description or a tag; keep it
+out of your own descriptions, tags and tickets too.
 
 ```hcl
 module "sre_agent_readonly" {

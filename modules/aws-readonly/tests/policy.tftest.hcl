@@ -130,3 +130,30 @@ run "identity_read_covers_the_bulk_iam_read" {
     error_message = "no statement grants cloudwatch:Get*, which covers cloudwatch:GetMetricData"
   }
 }
+
+# The ExternalId is the confused-deputy protection: it belongs in the trust policy's condition and
+# nowhere a role listing, CloudTrail or an inventory tool would show it. A role description is
+# readable by anyone who can call iam:GetRole or iam:ListRoles.
+run "role_description_holds_no_external_id" {
+  command = apply
+
+  assert {
+    condition     = !strcontains(aws_iam_role.this.description, var.external_id) && aws_iam_role.this.description != ""
+    error_message = "the role description names the ExternalId, or is empty"
+  }
+
+  assert {
+    condition     = strcontains(aws_iam_role.this.description, "SRE Agent")
+    error_message = "the role description no longer says which product assumes the role"
+  }
+
+  assert {
+    condition     = aws_iam_role.this.tags == null || length([for k, v in aws_iam_role.this.tags : k if strcontains(v, var.external_id)]) == 0
+    error_message = "a tag carries the ExternalId"
+  }
+
+  assert {
+    condition     = strcontains(data.aws_iam_policy_document.trust.json, var.external_id)
+    error_message = "the trust policy lost its sts:ExternalId condition"
+  }
+}

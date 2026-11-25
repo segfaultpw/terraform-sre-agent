@@ -134,7 +134,7 @@ data "aws_iam_policy_document" "trust" {
 # not mean losing observability, and the two want different review cadences.
 resource "aws_iam_role" "this" {
   name                 = var.role_name
-  description          = "Remediation (ssm:SendCommand) for SRE Agent (${var.external_id})"
+  description          = "Remediation (ssm:SendCommand), assumed by the SRE Agent platform"
   assume_role_policy   = data.aws_iam_policy_document.trust.json
   max_session_duration = var.max_session_duration
   permissions_boundary = var.permissions_boundary_arn
