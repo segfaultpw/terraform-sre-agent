@@ -368,7 +368,7 @@ data "aws_iam_policy_document" "trust" {
 # and deleting it stops every deletion SRE Agent could make.
 resource "aws_iam_role" "this" {
   name                 = var.role_name
-  description          = "Deletions SRE Agent may make in this account (${var.external_id})"
+  description          = "Deletions the SRE Agent platform may make in this account"
   assume_role_policy   = data.aws_iam_policy_document.trust.json
   max_session_duration = var.max_session_duration
   permissions_boundary = var.permissions_boundary_arn

@@ -8,6 +8,51 @@ than a `terraform apply`.
 - **minor**: a permission added, because the product gained a feature needing it
 - **patch**: documentation, validation, formatting; no change to what is granted
 
+## [4.15.0]
+
+The `aws-readonly` module gains optional inputs and the four AWS role modules stop writing your
+ExternalId into the role's description. **A plan that sets none of the new inputs shows one in-place
+change per role (`~ description`) and nothing else.** The policy a default plan renders is
+byte for byte the one 4.14.1 rendered.
+
+### Changed
+- `aws-readonly`, `aws-cleanup`, `aws-iam-hygiene`, `aws-ssm-remediation`: **the ExternalId is no
+  longer written into the role's `description`.** The ExternalId identifies your organization to the
+  role's trust policy: it is not a credential and it never changes. A description is readable by
+  anyone who can call `iam:GetRole` or `iam:ListRoles` and appears in CloudTrail, AWS Config
+  snapshots and inventory tools, so keeping the id out of it simply stops it being broadcast
+  there. The trust policy's `sts:ExternalId` condition holds it and is the only place the modules now
+  write it. The new descriptions say what the role is for and that the SRE Agent platform assumes
+  it. Upgrading shows **one in-place update per role** (`aws_iam_role.description` updates through
+  `UpdateRoleDescription`; the role is not replaced, its ARN, sessions and permissions are
+  untouched). The old description stays in your CloudTrail and Terraform state history.
+  `external_id` stays a plain, non-sensitive variable: Terraform still prints a trust policy in a
+  plan whatever the mark, so it would only suggest protection it does not give.
+
+### Added
+- `aws-readonly`: `log_group_arns` (default null, every log group, today's behaviour). When set,
+  the CloudWatch Logs reads move out of the main policy into a **second managed policy**
+  (`logs_policy_name`, default `sre-agent-readonly-logs`, created and attached only in this case, so
+  an unset plan is unchanged). The actions SRE Agent calls: `FilterLogEvents`, `StartQuery`,
+  `GetQueryResults`, `GetLogEvents` and `GetLogGroupFields` apply only to the listed groups and
+  their streams; `DescribeLogGroups` and `StopQuery` take no resource in IAM and stay on `*` (the
+  names of your other groups stay visible, their contents do not). The other `Describe*`, `Get*` and
+  `List*` actions that take a log group are granted on the listed groups only, and **every Logs
+  action that names no log group, apart from those two, is not granted** (about twenty-five reads such
+  as `DescribeQueries` and `DescribeResourcePolicies`; the product calls none of them today). **Setting
+  it narrows access**: a request against an unlisted group is denied, and a Logs Insights query that
+  names even one unlisted group is refused as a whole. The product's Verify button may show the scoped
+  Logs actions as not granted until it checks them against the groups you listed. AWS caps a managed
+  policy at 6,144 characters, so a list longer than about 28 ARNs of 100 characters is refused at plan
+  time with a message that suggests name wildcards. An empty list and a value that is not a log group
+  ARN are refused. No effect while `enable_observability` is false. New output `logs_policy_arn`.
+- `aws-readonly`: `enable_prometheus` (default false) grants `aps:QueryMetrics`, `aps:GetLabels`,
+  `aps:GetSeries`, `aps:GetMetricMetadata` and `aps:ListRules` (the alerting rules, `GET
+  /api/v1/rules`, which SRE Agent's alert follow-up reads) for Amazon Managed Prometheus, on every
+  workspace unless `prometheus_workspace_arns` (default null, `*`) lists workspace ARNs. **A permission
+  added, and only when you turn it on**, which is why this is a minor version. Read-only: there is no
+  write action in the group.
+
 ## [4.14.1]
 
 The default `image` of the `fix-runner` module is now the `sre-agent-opencode` **v2.7.1** runner

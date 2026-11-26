@@ -7,6 +7,13 @@ variable "external_id" {
     Do not invent your own: the platform sends the value it generated, and a
     mismatch means every AssumeRole is denied. A shared or guessable value
     removes the confused-deputy protection this condition exists for.
+
+    It identifies your organization to the role's trust policy: it is not a
+    credential and it never changes. The module writes it only into the trust
+    policy's condition, so it is not broadcast to everyone who can call
+    iam:GetRole or iam:ListRoles through the role's description or tags. It is
+    not marked sensitive: Terraform would still print the trust policy in a
+    plan, so the mark would only suggest a protection it does not give.
   EOT
 
   validation {
@@ -41,6 +48,15 @@ variable "policy_name" {
   type        = string
   description = "Name of the customer-managed policy attached to the role."
   default     = "sre-agent-readonly"
+}
+
+variable "logs_policy_name" {
+  type        = string
+  description = <<-EOT
+    Name of the second customer-managed policy that holds the CloudWatch Logs
+    reads when `log_group_arns` is set. Not created otherwise.
+  EOT
+  default     = "sre-agent-readonly-logs"
 }
 
 variable "max_session_duration" {
@@ -169,6 +185,10 @@ variable "enable_observability" {
 
     Without CloudWatch nothing is ever "idle" or "oversized", because there is
     no utilization to judge it by.
+
+    The Logs actions here apply to every log group in the account. To limit
+    them to chosen groups (and so keep a sensitive one unreadable), set
+    `log_group_arns`.
   EOT
   default     = true
 }
@@ -252,4 +272,110 @@ variable "enable_bedrock" {
     instead.
   EOT
   default     = false
+}
+
+variable "log_group_arns" {
+  type        = list(string)
+  description = <<-EOT
+    Limits what SRE Agent can read from CloudWatch Logs to these log groups.
+    Null (the default) keeps today's behaviour: the Logs read actions apply to
+    every log group in the account.
+
+    Each entry is a log group ARN, for example
+    `arn:aws:logs:us-east-1:111122223333:log-group:/aws/lambda/checkout`. A
+    trailing `:*` is accepted and ignored, and the group's streams are covered
+    automatically. IAM wildcards work inside the name and in the Region and
+    account parts, so `arn:aws:logs:*:111122223333:log-group:/prod/*` covers every
+    group under `/prod/` in every Region.
+
+    When set, the Logs reads move out of the main policy into a second policy
+    (`logs_policy_name`) that is created and attached only in this case.
+    `logs:FilterLogEvents`, `logs:StartQuery`, `logs:GetQueryResults`,
+    `logs:GetLogEvents`, `logs:GetLogGroupFields` and the other `Describe*`,
+    `Get*` and `List*` actions that take a log group apply to the listed groups
+    only. Two actions the product calls take no resource and stay account-wide:
+    `logs:DescribeLogGroups` (the names of your other log groups remain visible
+    to SRE Agent, their contents do not) and `logs:StopQuery`. Every other Logs
+    action that names no log group is not granted while this is set.
+
+    A request against a log group you did not list is denied (AccessDenied). A
+    Logs Insights query names its groups together, so a query that names even one
+    unlisted group is refused as a whole. The product's Verify button may show
+    the scoped Logs actions as not granted until it checks them against the
+    groups you listed.
+
+    The second policy holds at most 6,144 characters without whitespace, which
+    AWS enforces. Each entry costs twice its ARN length plus 8 characters (the
+    group and its streams), about 5,850 characters in all, which is about 28
+    ARNs of 100 characters. A longer list is refused at plan time: use name
+    wildcards (`log-group:/prod/*`) instead of listing every group. Has no effect
+    when `enable_observability` is false. An empty list is refused, because it
+    would read as "no logs" while meaning nothing different from null; use null,
+    or turn `enable_observability` off.
+
+    Changing this from null to a list removes the account-wide Logs access from
+    the policy, so every search of a group you did not list is denied.
+  EOT
+  default     = null
+
+  validation {
+    condition     = var.log_group_arns == null ? true : length(var.log_group_arns) > 0
+    error_message = "log_group_arns must be null (every log group) or a non-empty list of log group ARNs."
+  }
+
+  validation {
+    condition = var.log_group_arns == null ? true : alltrue([
+      for a in var.log_group_arns : can(regex("^arn:aws[a-z-]*:logs:[^:]+:[^:]+:log-group:[^:]+(:\\*)?$", a))
+    ])
+    error_message = "Every log_group_arns entry must be a log group ARN such as arn:aws:logs:us-east-1:111122223333:log-group:/aws/lambda/checkout (IAM wildcards allowed, an optional trailing :* is fine)."
+  }
+
+  # The second policy is 294 characters of fixed text plus, for each ARN, the group and its
+  # streams: 2 * length + 8. AWS refuses a managed policy above 6,144 characters.
+  validation {
+    condition = var.log_group_arns == null ? true : !alltrue([
+      for a in var.log_group_arns : can(regex("^arn:aws[a-z-]*:logs:[^:]+:[^:]+:log-group:[^:]+(:\\*)?$", a))
+      ]) ? true : sum(concat([0], [
+        for a in var.log_group_arns : 2 * length(regex("^arn:aws[a-z-]*:logs:[^:]+:[^:]+:log-group:[^:]+", a)) + 8
+    ])) <= 5850
+    error_message = "log_group_arns is too long for one IAM policy (6,144 characters without whitespace; each ARN costs twice its length plus 8, 5,850 in all). Use name wildcards such as arn:aws:logs:us-east-1:111122223333:log-group:/prod/* instead of listing every group."
+  }
+}
+
+variable "enable_prometheus" {
+  type        = bool
+  description = <<-EOT
+    Amazon Managed Prometheus: `aps:QueryMetrics`, `aps:GetLabels`,
+    `aps:GetSeries`, `aps:GetMetricMetadata` and `aps:ListRules`, so SRE Agent can
+    run PromQL against your workspaces and read their alerting rules with this
+    role instead of a separate credential.
+
+    Read-only, and there is no write action in this group. Off by default,
+    because most accounts have no workspace. By default it covers every
+    workspace the role can see; set `prometheus_workspace_arns` to limit it.
+  EOT
+  default     = false
+}
+
+variable "prometheus_workspace_arns" {
+  type        = list(string)
+  description = <<-EOT
+    Limits the Prometheus group to these workspaces. Null (the default) means
+    every workspace (`*`). Each entry is a workspace ARN, for example
+    `arn:aws:aps:us-east-1:111122223333:workspace/ws-0123abcd`, or `*`.
+    Only used when `enable_prometheus` is true.
+  EOT
+  default     = null
+
+  validation {
+    condition     = var.prometheus_workspace_arns == null ? true : length(var.prometheus_workspace_arns) > 0
+    error_message = "prometheus_workspace_arns must be null (every workspace) or a non-empty list."
+  }
+
+  validation {
+    condition = var.prometheus_workspace_arns == null ? true : alltrue([
+      for a in var.prometheus_workspace_arns : a == "*" || can(regex("^arn:aws[a-z-]*:aps:[^:]+:[^:]+:workspace/[^:]+$", a))
+    ])
+    error_message = "Every prometheus_workspace_arns entry must be \"*\" or a workspace ARN such as arn:aws:aps:us-east-1:111122223333:workspace/ws-0123abcd."
+  }
 }

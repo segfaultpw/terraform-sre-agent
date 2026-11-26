@@ -181,3 +181,14 @@ run "everything_off_leaves_no_statement_but_the_trust" {
     error_message = "no group on means nothing granted and nothing to deny"
   }
 }
+
+# The ExternalId belongs in the trust policy's condition and nowhere a role listing would show it:
+# a role description is readable by anyone who can call iam:GetRole or iam:ListRoles.
+run "role_description_holds_no_external_id" {
+  command = plan
+
+  assert {
+    condition     = !strcontains(aws_iam_role.this.description, var.external_id) && strcontains(aws_iam_role.this.description, "SRE Agent")
+    error_message = "the role description names the ExternalId, or no longer says which product assumes the role"
+  }
+}
